@@ -1,0 +1,2562 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+from sheetname_map import *
+
+
+__author__ = 'wendy'
+
+"""
+Create on 15/9/2
+"""
+
+import os
+import pandas as pd
+import numpy as np
+from operator import itemgetter
+import datetime as dt
+
+from pptx import Presentation
+from pptx.util import Inches, Pt
+from pptx.enum.chart import XL_CHART_TYPE, XL_LEGEND_POSITION,XL_DATA_LABEL_POSITION
+from pptx.chart.data import ChartData
+from pptx.enum.chart import XL_DATA_LABEL_POSITION as DL_POSITION
+from pptx.dml.color import RGBColor
+from pptx.enum.text import PP_PARAGRAPH_ALIGNMENT as PP_ALIGN
+import pptx.enum.chart
+from xml.sax.saxutils import escape
+
+
+
+
+MAX_ROWS = 33
+MAX_ROWS1 = 27
+PIE_FONT_SIZE=Pt(10)
+MINI_FONT_SIZE = Pt(7)
+TINY_FONT_SIZE = Pt(8)
+SMALL_FONT_SIZE = Pt(6)
+SMALL_FONT_SIZE_SMLL=Pt(4.5)
+BLUE = RGBColor(16, 130, 204)
+WHITE = RGBColor(255, 255, 255)
+BLACK = RGBColor(0, 0, 0)
+
+T_LEFT = Inches(0.5)
+T_TOP = Inches(0.8)
+W_COL0 = Inches(1.5)
+W_COL1 = Inches(2.0)
+C_LEFT = Inches(8)
+C_TOP=Inches(3.6)
+C_WIDTH = Inches(4.0)
+def divide(x):
+    return round(float(x)/1000000,2)
+
+def get_last_week_day(fy_q_w):
+    fy, qtr, wk = [int(i) for i in fy_q_w]
+    fy16_qtr_1st_day = (
+        (2015, 7, 26),
+        (2015, 10, 25),
+        (2016, 1, 24),
+        (2016, 5, 1),
+    )
+    if fy == 15:
+        return 'Jul 20, 2015 - Jul 24, 2015'
+    # if fy != 16:
+    #     raise Exception('Not valid FY!')
+    if qtr not in (1, 2, 3, 4):
+        raise Exception('Not valid quarter id!')
+    if wk not in xrange(1, 14):
+        raise Exception('Not valid week id!')
+    q1st = dt.datetime(*fy16_qtr_1st_day[qtr - 1])
+
+    monday = q1st + dt.timedelta(wk * 7 - 6)
+    friday = q1st + dt.timedelta(wk * 7 - 2)
+    return monday.strftime('%b %d, %Y') + ' - ' + friday.strftime('%b %d, %Y')
+
+
+def get_ytd_df(path, filename):
+    db_file = os.path.join(path, 'db', filename)
+    df = pd.read_csv(db_file,
+                     encoding='utf-8',
+                     thousands=',',
+                     low_memory=False)
+    columns=df.columns.str.upper()
+    df.columns=columns
+    df[COUNTRY] = df[COUNTRY].str.upper()
+    df[SEGMENT] = df[SEGMENT].str.upper()
+    df[IDT_Level3]=df[IDT_Level3].str.upper()
+    df[IDT_Level4]=df[IDT_Level4].str.upper()
+    df[Normalized_Customer_Name]=df[Normalized_Customer_Name].str.upper()
+    # df[SL1]=df[SL1].str.upper()
+    df = mapped_df(path, df)
+    return df
+
+def mapped_df(path, ytd):
+    xls = pd.ExcelFile(os.path.join(path, 'mapping', 'MAPPING4REPORT.xlsx'))
+    for sheet_name in ("SERVICE_LINE_1","COUNTRY","SERVICE_LINE_2","Normalized_Customer_Name"):
+        mapping = xls.parse(sheet_name)
+        col_name = mapping.columns[0]
+        for name, name_abbr in mapping.values:
+            ytd.ix[ytd[col_name] == name, col_name] = name_abbr
+    return ytd
+def mapped_china(path,ytd):
+    xls = pd.ExcelFile(os.path.join(path, 'mapping', 'MAPPING CHINA.xlsx'))
+    for sheet_name in ('APJC', 'CUSTOMER'):
+        mapping = xls.parse(sheet_name)
+        col_name = mapping.columns[0]
+        for name, name_abbr in mapping.values:
+            ytd.ix[ytd[col_name] == name, col_name] = name_abbr
+    return ytd
+    # xls = pd.ExcelFile(os.path.join(path, 'mapping', 'MAPPING CHINA.xlsx'))
+    # mapping = xls.parse("APJC")
+    # #col_name = mapping.columns[0]
+    # for name, name_abbr in mapping.values:
+    #     ytd.ix[ytd[COUNTRY] == name, COUNTRY] = name_abbr
+    # return ytd
+
+
+
+def create_pivot(ytd, pt_index0, pt_index1):
+    return pd.pivot_table(ytd,
+                          values=BOOKING_AMOUNT,
+                          columns=FISCAL_QUARTER,
+                          index=[pt_index0, pt_index1],
+                          aggfunc=np.sum,
+                          fill_value=0,
+                          margins=True)
+
+
+def create_summary_pivot(ytd, pt_index0):
+    return pd.pivot_table(ytd,
+                          values=[BOOKING_AMOUNT],
+                          index=[pt_index0],
+                          aggfunc=np.sum,
+                          fill_value='',
+                          margins=True)
+
+
+# merge cells vertically
+def merge_cells_vertically(table, start_row_idx, end_row_idx, col_idx):
+    row_count = end_row_idx - start_row_idx + 1
+    column_cells = [r.cells[col_idx] for r in table.rows][start_row_idx:]
+    column_cells[0]._tc.set('rowSpan', str(row_count))
+    for c in column_cells[1:]:
+        c._tc.set('vMerge', '1')
+
+
+# merge cells horizontally
+def merge_cells_horizontally(table, row_idx, start_col_idx, end_col_idx):
+    col_count = end_col_idx - start_col_idx + 1
+    row_cells = [c for c in table.rows[row_idx].cells][start_col_idx:end_col_idx]
+    row_cells[0]._tc.set('gridSpan', str(col_count))
+    for c in row_cells[1:]:
+        c._tc.set('hMerge', '1')
+
+
+# set cell format
+def set_cell_format(c, font_size, header=0, is_number=False):
+    p = c.text_frame.paragraphs[0]
+    p.line_spacing = 0.9
+    font = p.font
+    font.size = font_size
+    font.name = 'Arial Narrow'
+    if header == 1:  # header
+        c.fill.solid()
+        c.fill.fore_color.rgb = BLUE
+        font.bold = True
+        font.color.rgb = WHITE
+    elif header == 2:  # sub header
+        c.fill.solid()
+        c.fill.fore_color.rgb = BLACK
+        font.bold = True
+        font.color.rgb = WHITE
+    # else:
+    # font.color.rgb = BLUE
+    if is_number:
+        p.alignment = PP_ALIGN.RIGHT
+
+
+def create_sub_title_slide(ppt, cat):
+    sub_title_slide_layout = ppt.slide_layouts[1]
+    cover_slide = ppt.slides.add_slide(sub_title_slide_layout)
+    cover_slide.shapes.title.text = cat
+    return cover_slide
+
+
+def create_title_only_slide(ppt, title, for_chart=False):
+    # add a new slide
+    if for_chart:
+        title_only_slide_layout = ppt.slide_layouts[5]
+    else:
+        title_only_slide_layout = ppt.slide_layouts[2]
+    slide = ppt.slides.add_slide(title_only_slide_layout)
+    shapes = slide.shapes
+    shapes.title.text = title
+
+    return slide
+def create_table_booking(slide, part, is_last_page=False):
+    font_size = SMALL_FONT_SIZE
+    if is_last_page:
+        cats = part[1:-1]
+        rows = part[0] + 1
+    else:
+        cats = part[1:]
+        rows = part[0] + 2
+
+    index_names = part[1][1].index.names
+    col_levels = part[1][1].columns
+    col_name = part[1][1].columns.name
+    col_offset = len(index_names)
+    span = len(col_levels)
+    cols = span + col_offset
+
+    table = slide.shapes.add_table(rows-1, cols, T_LEFT, T_TOP, Inches(2), Inches(1)).table
+    table.first_row = False
+
+    # set column widths
+    table.columns[0].width = Inches(1.0)
+    # w_col = Inches(2 / span)
+    for i in range(1, cols):
+        table.columns[i].width = Inches(1)
+    table.columns[1].width = Inches(1.8)
+    table.columns[6].width = Inches(1.8)
+    #write table header
+    # table.cell(0, col_offset - 1).text = str(col_name)
+    # for i in range(span - 1):
+    #     # table.cell(0, col_offset + i).text = str(col_levels[i])
+    # table.cell(0, col_offset + span - 1).text = 'TOTAL'
+    for i in range(col_offset):
+        field_name = index_names[i]
+        table.cell(0, i).text = field_name
+    table.cell(0, col_offset + span - 1).text = 'TOTAL'
+    # format header
+    r = table.rows[0]
+    for c in r.cells:
+        set_cell_format(c, font_size, True, True)
+    r = table.rows[1]
+    for c in r.cells:
+        set_cell_format(c, font_size, True)
+    start_row_idx = 1
+    for cat, sub_pt, sub_total in cats:
+        num_sub_rows = len(sub_pt)
+
+        cell = table.cell(start_row_idx, 0)
+        cell.text = cat
+        for row in range(0, cols):
+            cell = table.cell(start_row_idx, row)
+            set_cell_format(cell, font_size, 2)
+        for i, total in enumerate(sub_total, start=col_offset):
+            cell = table.cell(start_row_idx, i)
+            cell.text = '{:,.0f}'.format(total)
+            set_cell_format(cell, font_size, 2, True)
+
+        start_row_idx += 1
+        sub_index = sub_pt.index
+        sub_values = sub_pt.values
+        dummy = [v[-1] for v in sub_values]
+        sorted_rows = sorted(zip(sub_index, sub_values, dummy),
+                             key=itemgetter(-1),
+                             reverse=True)
+        for i, r in enumerate(sorted_rows):
+            for item,value in enumerate(r[0]):
+                cell = table.cell(start_row_idx + i, item)
+                cell.text = str(value)
+                set_cell_format(cell, font_size)
+            for j, c in enumerate(r[1]):
+                cell = table.cell(start_row_idx + i, col_offset + j)
+                set_cell_format(cell, font_size, 0, True)
+                try:
+                    cell.text = '{:,.0f}'.format(c)
+                except ValueError:
+                    cell.text = c
+        start_row_idx += num_sub_rows
+
+    if is_last_page:
+        cat, sub_pt, sub_total = part[-1]
+        cell = table.cell(start_row_idx, 0)
+        cell.text = cat
+        for row in range(0,cols):
+            cell = table.cell(start_row_idx, row)
+            set_cell_format(cell, font_size, 1)
+        sub_values = sub_pt.values
+        for i, total in enumerate(sub_values[0], start=col_offset):
+            cell = table.cell(start_row_idx, i)
+            cell.text = '{:,.0f}'.format(total)
+            set_cell_format(cell, font_size, 1, True)
+def create_table(slide, part, is_last_page=False):
+    font_size = SMALL_FONT_SIZE
+    if is_last_page:
+        cats = part[1:-1]
+        rows = part[0] + 1
+    else:
+        cats = part[1:]
+        rows = part[0] + 2
+    ss=part[1][1].columns
+    sss=part[1][1].index
+    index_names = part[1][1].index.names
+    col_levels = part[1][1].columns
+    col_name = part[1][1].columns.name
+    col_offset = len(index_names)
+    span = len(col_levels)
+    cols = span + col_offset
+
+    table = slide.shapes.add_table(rows, cols, T_LEFT, T_TOP, Inches(2), Inches(1)).table
+    table.first_row = False
+
+    # set column widths
+    table.columns[0].width = Inches(2)
+    w_col = Inches(2 / span)
+    for i in range(1, cols):
+        table.columns[i].width = w_col
+
+    #write table header
+    table.cell(0, col_offset - 1).text = str(col_name)
+    # for i in range(span - 1):
+    #     # table.cell(0, col_offset + i).text = str(col_levels[i])
+    table.cell(0, col_offset + span - 1).text = 'TOTAL'
+    for i in range(col_offset):
+        field_name = index_names[i]
+        table.cell(1, i).text = field_name
+
+    # format header
+    r = table.rows[0]
+    for c in r.cells:
+        set_cell_format(c, font_size, True, True)
+    r = table.rows[1]
+    for c in r.cells:
+        set_cell_format(c, font_size, True)
+
+    start_row_idx = 2
+    for cat, sub_pt, sub_total in cats:
+        num_sub_rows = len(sub_pt)
+
+        cell = table.cell(start_row_idx, 0)
+        cell.text = cat
+        set_cell_format(cell, font_size, 2)
+        for i, total in enumerate(sub_total, start=col_offset):
+            cell = table.cell(start_row_idx, i)
+            cell.text = '{:,.0f}'.format(total)
+            set_cell_format(cell, font_size, 2, True)
+
+        start_row_idx += 1
+        sub_index = sub_pt.index
+        sub_values = sub_pt.values
+        dummy = [v[-1] for v in sub_values]
+        sorted_rows = sorted(zip(sub_index, sub_values, dummy),
+                             key=itemgetter(-1),
+                             reverse=True)
+        for i, r in enumerate(sorted_rows):
+            cell = table.cell(start_row_idx + i, 0)
+            cell.text = str(r[0])
+            set_cell_format(cell, font_size)
+            for j, c in enumerate(r[1]):
+                cell = table.cell(start_row_idx + i, col_offset + j)
+                set_cell_format(cell, font_size, 0, True)
+                try:
+                    cell.text = '{:,.0f}'.format(c)
+                except ValueError:
+                    cell.text = c
+        start_row_idx += num_sub_rows
+
+    if is_last_page:
+        cat, sub_pt, sub_total = part[-1]
+        cell = table.cell(start_row_idx, 0)
+        cell.text = cat
+        set_cell_format(cell, font_size, 1)
+        sub_values = sub_pt.values
+        for i, total in enumerate(sub_values[0], start=col_offset):
+            cell = table.cell(start_row_idx, i)
+            cell.text = '{:,.0f}'.format(total)
+            set_cell_format(cell, font_size, 1, True)
+def create_table_update(slide, part, is_last_page=False):
+    font_size = SMALL_FONT_SIZE
+    if is_last_page:
+        cats = part[1:-1]
+        rows = part[0] + 1
+    else:
+        cats = part[1:]
+        rows = part[0] + 2
+    index_names = part[1][1].index.names
+    col_levels = part[1][1].columns.levels[2][1:]
+    col_name = part[1][1].columns.name
+    col_offset = len(index_names)
+    span = len(col_levels)
+    cols = span + col_offset+1
+    headers=list(col_levels)
+    q_data_len=len(headers)
+    header_temp=["YOY%Q1","YOY%Q2","YOY%Q3","YOY%Q4","FY16","FY17","YOY%"]
+    # print headers
+    if q_data_len==4:
+        value_index=(0,1,2,3)
+        headers.extend(header_temp)
+    if q_data_len==5:
+        value_index=(0,4,1,2,3)
+        headers.insert(1,headers[-1])
+        del headers[-1]
+        headers.extend(header_temp)
+    if q_data_len==6:
+        value_index=(0,4,1,5,2,3)
+        headers.insert(1,headers[-2])
+        headers.insert(3,headers[-1])
+        del headers[-1]
+        del headers[-1]
+        headers.extend(header_temp)
+    if q_data_len==7:
+        value_index=(0,4,1,5,2,6,3)
+        headers.insert(1, headers[-3])
+        headers.insert(3, headers[-2])
+        headers.insert(5, headers[-1])
+        del headers[-1]
+        del headers[-1]
+        del headers[-1]
+        headers.extend(header_temp)
+    if q_data_len==8:
+        value_index=(0,4,1,5,2,6,3,7)
+        headers.insert(1, headers[-4])
+        headers.insert(3, headers[-3])
+        headers.insert(5, headers[-2])
+        del headers[-2]
+        del headers[-2]
+        del headers[-2]
+        headers.extend(header_temp)
+    if q_data_len==0 or q_data_len==1 or q_data_len==2 or q_data_len==3:
+        return None
+
+    table = slide.shapes.add_table(rows-1, span+8, T_LEFT, T_TOP, Inches(10), Inches(1)).table
+    table.first_row = False
+
+    # set column widths
+    table.columns[0].width = Inches(0.8)
+    w_col = Inches(10.0 / (span+7))
+    for i in range(1, cols):
+        table.columns[i].width = w_col
+    #write table header
+    table.cell(0, col_offset - 1).text = str(col_name)
+    for i in range(span+7):
+         table.cell(0, i+1).text = headers[i]
+
+    r = table.rows[0]
+    for c in r.cells:
+        set_cell_format(c, font_size, True, True)
+    r = table.rows[1]
+    for c in r.cells:
+        set_cell_format(c, font_size, True)
+
+    start_row_idx = 1
+    for cat, sub_pt, sub_total in cats:
+        num_sub_rows = len(sub_pt)
+
+        cell = table.cell(start_row_idx, 0)
+        cell.text = cat
+        set_cell_format(cell, font_size, 2)
+        for i, total in enumerate(value_index, start=col_offset):
+            cell = table.cell(start_row_idx, i)
+            try:
+                cell.text = '{:,.0f}'.format(sub_total[total])
+            except:
+                cell.text=str(0)
+            set_cell_format(cell, font_size, 2, True)
+        for i in range(4):
+            cell=table.cell(start_row_idx,i+span+1)
+            if sub_total[i]==0:
+                YOY=str(0)+"%"
+            else:
+                try:
+                   YOY=str(round(float((sub_total[i+4]-sub_total[i]))/sub_total[i],2)*100)+"%"
+                except:
+                    YOY='-100%'
+            cell.text=YOY
+            set_cell_format(cell, font_size, 2, True)
+        fy15_total=0
+        fy16_total=0
+        for i in range(4):
+            fy15_total=fy15_total+sub_total[i]
+        for i in range(4,span):
+            fy16_total=fy16_total+sub_total[i]
+
+        cell=table.cell(start_row_idx,span+5)
+        cell.text = '{:,.0f}'.format(fy15_total)
+        set_cell_format(cell, font_size, 2, True)
+        cell=table.cell(start_row_idx,span+6)
+        cell.text = '{:,.0f}'.format(fy16_total)
+        set_cell_format(cell, font_size, 2, True)
+        cell=table.cell(start_row_idx,span+7)
+        if fy15_total==0:
+            fy_YOY=str(0)+"%"
+        else:
+            fy_YOY=str(round(float((fy16_total-fy15_total))/fy15_total,2)*100)+"%"
+        cell.text=fy_YOY
+        set_cell_format(cell, font_size, 2, True)
+
+        start_row_idx += 1
+        sub_index = sub_pt.index
+        sub_values = sub_pt.values
+        dummy = [v[-1] for v in sub_values]
+        sorted_rows = sorted(zip(sub_index, sub_values, dummy),
+                             key=itemgetter(-1),
+                             reverse=True)
+        for i, r in enumerate(sorted_rows):
+            rr=np.delete(r[1],-1,0)
+            # print sorted_rows
+            cell = table.cell(start_row_idx + i, 0)
+            cell.text = str(r[0])
+            set_cell_format(cell, font_size)
+
+            for j, c in enumerate(value_index):
+                cell = table.cell(start_row_idx + i, col_offset + j)
+                set_cell_format(cell, font_size, 0, True)
+                try:
+                   cell.text = '{:,.0f}'.format(rr[c])
+                except:
+                   cell.text = str(0)
+            for m in range(4):
+                cell=table.cell(start_row_idx+i,m+span+1)
+                if r[1][m]==0:
+                    YOY=str(0)+"%"
+                else:
+                    try:
+                        YOY=str(round(float((rr[m+4]-rr[m]))/rr[m],2)*100)+"%"
+                    except:
+                        YOY='-100%'
+                cell.text=YOY
+                set_cell_format(cell, font_size, 0, True)
+            fy15_total=0
+            for n in range(4):
+                fy15_total=fy15_total+r[1][n]
+            fy16_total = r[2]-fy15_total
+            cell=table.cell(start_row_idx+i,span+5)
+            cell.text = '{:,.0f}'.format(fy15_total)
+            # # cell.text=str(fy15_total)
+            #
+            set_cell_format(cell, font_size, 0, True)
+            cell=table.cell(start_row_idx+i,span+6)
+            # cell.text=str(fy16_total)
+            cell.text = '{:,.0f}'.format(fy16_total)
+            set_cell_format(cell, font_size, 0, True)
+            cell=table.cell(start_row_idx+i,span+7)
+            if fy15_total==0:
+                fy_YOY=str(0)+"%"
+            else:
+                fy_YOY=str(round(float((fy16_total-fy15_total))/fy15_total,2)*100)+"%"
+            cell.text=fy_YOY
+            set_cell_format(cell, font_size, 0, True)
+
+
+        start_row_idx += num_sub_rows
+
+    if is_last_page:
+        cat, sub_pt, sub_total = part[-1]
+        cell = table.cell(start_row_idx, 0)
+        cell.text = cat
+        set_cell_format(cell, font_size, 1)
+        sub_values1 = sub_pt.values
+        sub_values=np.delete(sub_values1,-1,1)
+        for i, total in enumerate(value_index, start=col_offset):
+            cell = table.cell(start_row_idx, i)
+            try:
+                cell.text = '{:,.0f}'.format(sub_values[0][total])
+            except:
+                cell.text=str(0)
+            set_cell_format(cell, font_size, 1, True)
+        for m in range(4):
+            cell=table.cell(start_row_idx, m+span+1)
+            if sub_values[0][m]==0:
+                YOY=str(0)+"%"
+            else:
+                try:
+                    YOY=str(round(float((sub_values[0][m+4]-sub_values[0][m]))/sub_values[0][m],2)*100)+"%"
+                except:
+                    YOY='-100%'
+            cell.text=YOY
+            set_cell_format(cell, font_size, 1, True)
+        fy15_total=0
+        fy16_total=0
+        for n in range(4):
+            fy15_total=fy15_total+sub_values[0][n]
+        for i in range(4,span):
+            fy16_total = fy16_total + sub_values[0][i]
+        cell=table.cell(start_row_idx,span+5)
+        cell.text = '{:,.0f}'.format(fy15_total)
+        set_cell_format(cell, font_size, 1, True)
+        cell=table.cell(start_row_idx,span+6)
+        cell.text = '{:,.0f}'.format(fy16_total)
+        set_cell_format(cell, font_size, 1, True)
+        cell=table.cell(start_row_idx,span+7)
+        if fy15_total==0:
+            fy_YOY=str(0)+"%"
+        else:
+            fy_YOY=str(round(float((fy16_total-fy15_total))/fy15_total,2)*100)+"%"
+        cell.text=fy_YOY
+        set_cell_format(cell, font_size, 1, True)
+
+
+def create_pie_chart(slide, pivot_table):
+    chart_data = ChartData()
+    cat = [c for c in pivot_table.index]
+    ser = [s[0] for s in pivot_table.values]
+
+    chart_data.categories = cat[:-1]
+    chart_data.add_series('Booking', ser[:-1])
+
+    chart = slide.shapes.add_chart(XL_CHART_TYPE.PIE,
+                                   C_LEFT, Inches(3.6), C_WIDTH, C_WIDTH,
+                                   chart_data).chart
+
+    chart.plots[0].has_data_labels = True
+    data_labels = chart.plots[0].data_labels
+    data_labels.number_format = '0%'
+    data_labels.font.size = PIE_FONT_SIZE
+    data_labels.font.name = 'Arial Narrow'
+    data_labels.position = DL_POSITION.BEST_FIT
+    data_labels.font.color.rgb = WHITE
+    dl_props = data_labels._element.getchildren()
+    dl_props[4].set('val', '0')  # Don't show value for data label
+    dl_props[5].set('val', '1')  # Show category for data label
+    dl_props[7].set('val', '1')  # Show percentage for data label
+
+
+def create_summary_table(slide, pivot_table):
+    cat = [c for c in pivot_table.index]
+    ser = [s[0] for s in pivot_table.values]
+
+    sorted_rows = sorted(zip(cat[:-1], ser[:-1]), key=itemgetter(-1), reverse=1)
+    field_name = pivot_table.index.names[0]
+    sorted_rows.insert(0, (field_name, 'TOTAL'))
+    sorted_rows.append(('GRAND TOTAL', ser[-1]))
+    num_rows = len(sorted_rows)
+    top = Inches(3.75 - (num_rows + 1) * 0.14)
+    table = slide.shapes.add_table(num_rows, 2, T_LEFT, top, C_WIDTH, Inches(1)).table
+    table.first_row = False
+    table.columns[0].width = Inches(4.0)
+    table.columns[1].width = Inches(1.5)
+
+    for i, (c, s) in enumerate(sorted_rows):
+        r = table.rows[i]
+        header = 0
+        if i == 0 or i == len(sorted_rows) - 1:
+            header = 1
+        cell = r.cells[0]
+        set_cell_format(cell, SMALL_FONT_SIZE, header, False)
+        cell.text = c
+        cell = r.cells[1]
+        set_cell_format(cell, SMALL_FONT_SIZE, header, True)
+        try:
+            cell.text = '{:,.0f}'.format(s)
+        except ValueError:
+            cell.text = s
+
+
+def create_segment_summary_table(slide, pivot_table):
+    cat = [c for c in pivot_table.index]
+    ser = [s[0] for s in pivot_table.values]
+    rows = zip(cat, ser)[:-1]
+    ges_sub_total = sum([s for c, s in rows if 'GES_' in c])
+
+    rows = sorted(rows, key=itemgetter(-1))
+    sorted_rows = [(SEGMENT, 'TOTAL')]
+    for row in rows:
+        if 'GSP' == row[0]:
+            sorted_rows.append(row)
+        else:
+            sorted_rows.insert(1, row)
+    if len(sorted_rows) > 2:
+        sorted_rows.insert(1, ('GES', ges_sub_total))
+    sorted_rows.append(('GRAND TOTAL', ser[-1]))
+
+    num_rows = len(sorted_rows)
+    top = Inches(3.75 - (num_rows + 1) * 0.14)
+    table = slide.shapes.add_table(num_rows, 2, T_LEFT, top, C_WIDTH, Inches(1)).table
+    table.first_row = False
+    table.columns[0].width = Inches(4.0)
+    table.columns[1].width = Inches(1.5)
+
+    for i, (c, s) in enumerate(sorted_rows):
+        r = table.rows[i]
+        if i == 0 or i == len(sorted_rows) - 1:
+            header = 1
+        elif c in ('GES', 'GSP'):
+            header = 2
+        else:
+            header = 0
+        cell = r.cells[0]
+        set_cell_format(cell, SMALL_FONT_SIZE, header, False)
+        cell.text = c
+        cell = r.cells[1]
+        set_cell_format(cell, SMALL_FONT_SIZE, header, True)
+        try:
+            cell.text = '{:,.0f}'.format(s)
+        except ValueError:
+            cell.text = s
+
+
+def create_top_table(slide, columns):
+
+    table_width = Inches(5.0)
+    col_width = Inches(1)
+    font_size = SMALL_FONT_SIZE
+
+    l = T_LEFT - Inches(0.15)
+    for column in columns:
+        rows = column[0]
+        if rows!=0:
+            table = slide.shapes.add_table(rows, 2, l, T_TOP, C_WIDTH, Inches(0.5)).table
+            table.columns[0].width = table_width - col_width
+            table.columns[1].width = col_width
+            table.first_row = False
+            row_id = 0
+            for level1, top in column[1:]:
+                cat = [c for c in top.index]
+                ser = ['{:,.0f}'.format(v[0]) for v in top.values]
+                cell_h = table.cell(row_id, 0)
+                merge_cells_horizontally(table, row_id, 0, 1)
+                cell_h.text = level1
+                set_cell_format(cell_h, font_size, 1)
+                for c, s in zip(cat, ser):
+                    row_id += 1
+                    r = table.rows[row_id]
+                    cell = r.cells[0]
+                    set_cell_format(cell, font_size, 0)
+                    cell.text = c
+                    cell = r.cells[1]
+                    set_cell_format(cell, font_size, 0, True)
+                    cell.text = s
+                row_id += 1
+            l += table_width + Inches(0.2)
+
+
+def my_counter(my_list, parent_list):
+    current_list = []
+    for size in parent_list:
+        l = my_list[:size]
+        my_list = my_list[size:]
+        keys = [l[0]]
+        new_l = [1]
+        for i in l[1:]:
+            if i == keys[-1]:
+                new_l[-1] += 1
+            else:
+                keys.append(i)
+                new_l.append(1)
+        current_list.extend(new_l)
+        if not my_list.any():
+            break
+    return current_list
+def create_booking_repoert_pt(ytd):
+    pt=pd.pivot_table(ytd,
+                          values=[BOOKING_AMOUNT],
+                          index=[REGION,Normalized_Customer_Name,SEGMENT,SERVICE_LINES,IDT_Level3,ARCHITECTURE,TECHNOLOGY,BUSINESS_SERVICE],
+                          aggfunc=np.sum,
+                          margins=True,
+                          fill_value=0,
+                          margins_name="all"
+                          )
+    q = pt[BOOKING_AMOUNT].map(lambda x: x >10000 or x<-10000)
+    return pt[q]
+
+def create_bookings_report(ppt, title_prefix, ytd):
+    pt=create_booking_repoert_pt(ytd)
+    # print pt
+
+    all_level_11 = list(pt.index.get_level_values(0).unique())
+    # all_level_2=list(pt.index.get_level_values(1).unique())
+    # print all_level_2
+    # all_level_11 = [r for r in  all_level_1 if r != 'All']
+
+    sorted_sub_pts = []
+    for level1 in all_level_11[:-1]:
+        # print level1
+        sub_pt = pt.xs(level1, level=0)
+        # print sub_pt
+        sub_total = sub_pt.sum().values
+        sorted_sub_pts.append((sub_total[-1], level1, sub_pt, sub_total))
+    sorted_sub_pts.sort(reverse=True)
+
+    sorted_sub_pts.append((None, 'GRAND TOTAL', pt.xs('all', level=0), None))
+
+    parts = [[0]]
+    last_rows = 0
+    for dummy, level1, sub_pt, sub_total in sorted_sub_pts:
+        rows = len(sub_pt) + 1
+
+        if last_rows + rows > MAX_ROWS1:
+            if last_rows==0:
+                parts[-1].append((level1, sub_pt, sub_total))
+                last_rows += rows
+                parts[-1][0] = last_rows
+                continue
+            else:
+                parts[-1][0] = last_rows  # Parameter for create PPT Table
+                parts.append([rows, (level1, sub_pt, sub_total)])
+                last_rows = rows
+                continue
+        parts[-1].append((level1, sub_pt, sub_total))
+        last_rows += rows
+        parts[-1][0] = last_rows
+
+    if len(parts[-1]) == 2:  # Only GRAND TOTAL row
+        parts[-2].append(parts[-1][1])
+        parts[-2][0] += 2
+        parts.pop()
+
+    last_page_id = len(parts) - 1
+    for i, part in enumerate(parts):
+        slide = create_title_only_slide(ppt, title_prefix)
+        create_table_booking(slide, part, i == last_page_id)
+    # pt=create_booking_repoert_pt(ytd)
+    # headers=list(pt.index.names)
+    # col_text_list = pt.index.levels
+    # values = pt.values
+    # labels = pt.index.labels
+    # num_rows = len(values)
+    # num_cols = len(headers)
+    # slide = create_title_only_slide(ppt, title_prefix)
+    # table = slide.shapes.add_table(num_rows + 2,
+    #                                num_cols + 1,
+    #                                T_LEFT, T_TOP,
+    #                                Inches(10.0),
+    #                                Inches(0.1)).table
+    # col_width = (12.3) / (num_cols + 1)
+    # for i, h in enumerate(headers):
+    #     table.columns[i].width = Inches(col_width)
+    #     cell = table.cell(0, i)
+    #     cell.text = h
+    #     set_cell_format(cell, SMALL_FONT_SIZE, True)
+    # table.columns[0].width = Inches(0.8)
+    # table.columns[1].width = Inches(0.8)
+    # table.columns[2].width = Inches(1.8)
+    # cell = table.cell(0,num_cols)
+    # cell.text = 'Booking'
+    # set_cell_format(cell, SMALL_FONT_SIZE, True, True)
+    # grand_toal=[]
+    # grand_toal_int=0
+    # for row_id in range(num_rows):
+    #     for col_id in range(num_cols):
+    #         cell = table.cell(row_id + 1, col_id)
+    #         cell.text = str(col_text_list[col_id][labels[col_id][row_id]])
+    #         set_cell_format(cell, SMALL_FONT_SIZE)
+    #     cell = table.cell(row_id + 1, num_cols)
+    #     #cell.text = '{:,.0f}'.format(values[row_id][0])
+    #     cell.text='{:,.0f}'.format(values[row_id][0])
+    #     grand_toal.append(values[row_id][0])
+    #     set_cell_format(cell, SMALL_FONT_SIZE, False, True)
+    # for item in grand_toal:
+    #     grand_toal_int=grand_toal_int+item
+    # cell = table.cell(num_rows+1, 0)
+    # cell.text = "Grand Toal"
+    # set_cell_format(cell, SMALL_FONT_SIZE, False, True)
+    # cell = table.cell(num_rows+1, num_cols)
+    # cell.text = '{:,.0f}'.format(grand_toal_int)
+    # set_cell_format(cell, SMALL_FONT_SIZE, False, True)
+    # for i in range(num_cols+1):
+    #     cell=table.cell(num_rows+1,i)
+    #     set_cell_format(cell, SMALL_FONT_SIZE,True)
+
+
+def create_report(ppt, title, ytd_df, pt_index):
+    pt = create_pivot(ytd_df, *pt_index)
+    pt1 = create_summary_pivot(ytd_df, pt_index[0])
+
+    # Sort sub table by sub-total except Total
+    all_level_1 = list(pt.index.get_level_values(0).unique())
+    # print all_level_1
+    sorted_sub_pts = []
+    for level1 in all_level_1[:-1]:
+        # print level1
+        sub_pt = pt.xs(level1, level=0)
+        sub_total = sub_pt.sum().values
+        # Filter Booking_Amount < 1000 rows out of sub pivot table
+        if sub_total[-1] < 1000:
+            continue
+        sub_pt = sub_pt[sub_pt.All > 999.0]
+        if not len(sub_pt):
+            continue
+        sorted_sub_pts.append((sub_total[-1], level1, sub_pt, sub_total))
+    sorted_sub_pts.sort(reverse=True)
+
+    # Add total
+    sorted_sub_pts.append((None, 'GRAND TOTAL', pt.xs('All', level=0), None))
+
+    parts = [[0]]
+    last_rows = 0
+    for dummy, level1, sub_pt, sub_total in sorted_sub_pts:
+        rows = len(sub_pt) + 1
+
+        if last_rows + rows > MAX_ROWS:  # Split table to new slide
+            parts[-1][0] = last_rows  # Parameter for create PPT Table
+            parts.append([rows, (level1, sub_pt, sub_total)])
+            last_rows = rows
+            continue
+        parts[-1].append((level1, sub_pt, sub_total))
+        last_rows += rows
+        parts[-1][0] = last_rows
+
+    if len(parts[-1]) == 2:  # Only GRAND TOTAL row
+        parts[-2].append(parts[-1][1])
+        parts[-2][0] += 2
+        parts.pop()
+
+    slide = create_title_only_slide(ppt, title, True)
+    create_pie_chart(slide, pt1)
+    if 'Segment' in title:
+        create_segment_summary_table(slide, pt1)
+    else:
+        create_summary_table(slide, pt1)
+    last_page_id = len(parts) - 1
+    for i, part in enumerate(parts):
+        slide = create_title_only_slide(ppt, title)
+        create_table(slide, part, i == last_page_id)
+
+
+def create_top_report(ppt, title, df, index0,flag=True):
+    if flag==True:
+        top_table = pd.pivot_table(df,
+                                   values=[BOOKING_AMOUNT],
+                                   index=[index0, Normalized_Customer_Name],
+                                   aggfunc=np.sum,
+                                   fill_value='')
+        q1 = top_table[BOOKING_AMOUNT] >10000
+        top_table = top_table[q1]
+        all_l1 = list(top_table.index.get_level_values(0).unique())
+        tops = []
+        for level1 in all_l1:
+            top = top_table.xs(level1, level=0).sort(columns=[BOOKING_AMOUNT], ascending=[0])
+            tops.append((level1, top[:10]))
+    else:
+        top_table = pd.pivot_table(df,
+                                   values=[ANNUAL_AMOUNT],
+                                   index=[index0, Normalized_Customer_Name],
+                                   aggfunc=np.sum,
+                                   fill_value='')
+        q1 = top_table[ANNUAL_AMOUNT] > 10000
+        top_table = top_table[q1]
+        all_l1 = list(top_table.index.get_level_values(0).unique())
+        tops = []
+        for level1 in all_l1:
+            top = top_table.xs(level1, level=0).sort(columns=[ANNUAL_AMOUNT], ascending=[0])
+            tops.append((level1, top[:10]))
+
+    columns = [[0]]
+    last_rows = 0
+    for top in tops:
+        rows = len(top[1]) + 1
+        if last_rows + rows > MAX_ROWS + 3:
+            columns[-1][0] = last_rows
+            columns.append([rows, top])
+            last_rows = rows
+            continue
+        columns[-1].append(top)
+        last_rows += rows
+        columns[-1][0] = last_rows
+
+    num_pages = (len(columns) + 1) / 2
+    for i in range(num_pages):
+        slide = create_title_only_slide(ppt, title)
+        create_top_table(slide, columns[i * 2:(i + 1) * 2])
+
+def create_table1(slide, part, is_last_page=False):
+    font_size = SMALL_FONT_SIZE
+
+    if is_last_page:
+        cats = part[1:-1]
+        rows = part[0] + 1
+    else:
+        cats = part[1:]
+        rows = part[0] + 2
+
+    index_names = part[1][1].index.names
+    col_levels = part[1][1].columns
+    col_name = part[1][1].columns.name
+    col_offset = len(index_names)
+    span = len(col_levels)
+    cols = span + col_offset
+
+    table = slide.shapes.add_table(rows, cols, T_LEFT, T_TOP, Inches(8), Inches(1)).table
+    table.first_row = False
+
+    # set column widths
+    # table.columns[0].width = Inches()
+    w_col = Inches(7.0 / span)
+    for i in range(0, cols):
+        table.columns[i].width = w_col
+    #write table header
+    # table.cell(0, col_offset - 1).text = str(col_name)
+    for i in range(span - 1):
+        table.cell(0, col_offset + i).text = str(col_levels[i][1])
+    # table.cell(0, col_offset + span - 1).text = 'YoY%'
+    for i in range(col_offset):
+        field_name = index_names[i]
+        table.cell(1, i).text = field_name
+
+    # format header
+    r = table.rows[0]
+    for c in r.cells:
+        set_cell_format(c, font_size, True, True)
+    r = table.rows[1]
+    for c in r.cells:
+        set_cell_format(c, font_size, True)
+    start_row_idx = 2
+    for cat, sub_pt, sub_total in cats:
+        num_sub_rows = len(sub_pt)
+        cell = table.cell(start_row_idx, 0)
+        cell.text = str(cat)
+        set_cell_format(cell, font_size, 2)
+        cell=table.cell(start_row_idx,1)
+        set_cell_format(cell, font_size, 2)
+        if sub_total[0]!=0:
+            temp=(sub_total[1]-sub_total[0])/sub_total[0]
+            temp1=round(temp,2)*100
+            temp2=str(temp1)+"%"
+        else:
+            temp2="0%"
+        for i, total in enumerate(sub_total[0:-1], start=col_offset):
+            cell = table.cell(start_row_idx, i)
+            cell.text = '{:,.0f}'.format(total)
+            set_cell_format(cell, font_size, 2, True)
+        cell=table.cell(start_row_idx, col_offset + span - 1)
+        cell.text = temp2
+        set_cell_format(cell, font_size, 2, True)
+        start_row_idx += 1
+        col_text_list = sub_pt.index.levels
+        values = sub_pt.values
+        labels = sub_pt.index.labels
+        num_cols = col_offset + span - 1
+        for row_id in range(num_sub_rows):
+            for col_id in range(2):
+                cell = table.cell(start_row_idx+row_id, col_id)
+                cell.text = str(col_text_list[col_id][labels[col_id][row_id]])
+                set_cell_format(cell, TINY_FONT_SIZE)
+            if values[row_id][0]!=0:
+                temp=(values[row_id][1]-values[row_id][0])/values[row_id][0]
+                temp1=round(temp,2)*100
+                temp2=str(temp1)+"%"
+            else:
+                temp2="0%"
+            for i in range(num_cols-2):
+                cell = table.cell(start_row_idx+row_id , i+2)
+                #cell.text = '{:,.0f}'.format(values[row_id][0])
+                cell.text='{:,.0f}'.format(values[row_id][i])
+                set_cell_format(cell, TINY_FONT_SIZE, False, True)
+            cell=table.cell(start_row_idx+row_id,num_cols)
+            cell.text=temp2
+            set_cell_format(cell, TINY_FONT_SIZE, False, True)
+        # sub_index = sub_pt.index
+        # sub_values = sub_pt.values
+        # dummy = [v[-1] for v in sub_values]
+        # sorted_rows = sorted(zip(sub_index, sub_values, dummy),
+        #                      key=itemgetter(-1),
+        #                      reverse=True)
+        # print sorted_rows
+        # # print sorted_rows
+        # for i, r in enumerate(sorted_rows):
+        #     cell = table.cell(start_row_idx + i, 0)
+        #     cell.text = str(r[0][0])
+        #     set_cell_format(cell, font_size)
+        #     cell = table.cell(start_row_idx + i, 1)
+        #     cell.text = str(r[0][1])
+        #     set_cell_format(cell, font_size)
+        #     if r[1][0]!=0:
+        #         temp=(r[1][1]-r[1][0])/r[1][0]
+        #         temp1=round(temp,2)*100
+        #         temp2=str(temp1)+"%"
+        #     else:
+        #         temp2="0%"
+        #     for j, c in enumerate(r[1][0:-1]):
+        #         cell = table.cell(start_row_idx + i, col_offset + j)
+        #         cell.text = '{:,.0f}'.format(c)
+        #         set_cell_format(cell, font_size, 0, True)
+        #
+        #     cell=table.cell(start_row_idx+ i, col_offset + span - 1)
+        #     cell.text = temp2
+        #     set_cell_format(cell, font_size, 0, True)
+
+
+        start_row_idx += num_sub_rows
+
+    if is_last_page:
+        cat, sub_pt, sub_total = part[-1]
+        cell = table.cell(start_row_idx, 0)
+        cell.text = cat
+        set_cell_format(cell, font_size, 1)
+        cell = table.cell(start_row_idx, 1)
+        set_cell_format(cell, font_size, 1)
+        sub_values = sub_pt.values
+        if sub_values[0][0]!=0:
+                temp=(sub_values[0][1]-sub_values[0][0])/sub_values[0][0]
+                temp1=round(temp,2)*100
+                temp2=str(temp1)+"%"
+        else:
+            temp2="0%"
+        for i, total in enumerate(sub_values[0][0:-1], start=col_offset):
+            cell = table.cell(start_row_idx, i)
+            cell.text = '{:,.0f}'.format(total)
+            set_cell_format(cell, font_size, 1, True)
+        cell1=table.cell(start_row_idx, col_offset + span - 1)
+        cell1.text = temp2
+        set_cell_format(cell1, font_size, True, True)
+
+
+
+
+
+
+def create_APJC_QTD_pt(qtd_def):
+     pt=pd.pivot_table(qtd_def,
+                          values=[BOOKING_AMOUNT],
+                          index=[SEGMENT,Normalized_Customer_Name],
+                          aggfunc=np.sum,
+                          margins=True,
+                          fill_value=0,
+                          )
+     q = pt[BOOKING_AMOUNT].map(lambda x: x > 10000)
+     return pt[q]
+
+
+def create_APJC_QTD(ppt,title_prefix_v06,qtd_def):
+    pt=create_APJC_QTD_pt(qtd_def)
+    all_level_1 = list(pt.index.get_level_values(0).unique())
+    # print all_level_1
+    sorted_sub_pts = []
+    for level1 in all_level_1[:-1]:
+        # print level1
+        sub_pt = pt.xs(level1, level=0)
+        sub_pt1=sub_pt.sort(columns=[BOOKING_AMOUNT], ascending=[0])
+        sub_pt2=sub_pt1.head(5)
+        sub_total = sub_pt2.sum().values
+        # Filter Booking_Amount < 1000 rows out of sub pivot table
+        if not len(sub_pt2):
+            continue
+        sorted_sub_pts.append((sub_total[-1], level1, sub_pt2, sub_total))
+    # sorted_sub_pts.sort(reverse=True)
+   # Add total
+    total=0
+    for item in sorted_sub_pts:
+        total=total+item[0]
+    #total bu dui
+    sorted_sub_pts.append((None, 'GRAND TOTAL', pt.xs('All', level=0), None))
+    parts = [[0]]
+    last_rows = 0
+    for dummy, level1, sub_pt, sub_total in sorted_sub_pts:
+        rows = len(sub_pt) + 1
+
+        if last_rows + rows > MAX_ROWS:  # Split table to new slide
+            parts[-1][0] = last_rows  # Parameter for create PPT Table
+            parts.append([rows, (level1, sub_pt, sub_total)])
+            last_rows = rows
+            continue
+        parts[-1].append((level1, sub_pt, sub_total))
+        last_rows += rows
+        parts[-1][0] = last_rows
+
+    if len(parts[-1]) == 2:  # Only GRAND TOTAL row
+        parts[-2].append(parts[-1][1])
+        parts[-2][0] += 2
+        parts.pop()
+
+    last_page_id = len(parts) - 1
+    car=[]
+    ser=[]
+    for i in range(0,len(sorted_sub_pts)-1):
+        car.append(sorted_sub_pts[i][1])
+        ser.append(sorted_sub_pts[i][0])
+    for i, part in enumerate(parts):
+        slide = create_title_only_slide(ppt, title_prefix_v06, True)
+        create_table(slide, part, i == last_page_id)
+        chart_data = ChartData()
+        chart_data.categories = car
+        chart_data.add_series('Booking', ser)
+
+        chart = slide.shapes.add_chart(XL_CHART_TYPE.PIE,
+                                       C_LEFT, T_TOP, C_WIDTH, C_WIDTH,
+                                       chart_data).chart
+
+        chart.plots[0].has_data_labels = True
+        data_labels = chart.plots[0].data_labels
+        data_labels.number_format = '0%'
+        data_labels.font.size = PIE_FONT_SIZE
+        data_labels.font.name = 'Arial Narrow'
+        data_labels.position = DL_POSITION.BEST_FIT
+        data_labels.font.color.rgb = WHITE
+        dl_props = data_labels._element.getchildren()
+        dl_props[4].set('val', '1')  # Don't show value for data label
+        dl_props[5].set('val', '1')  # Show category for data label
+        dl_props[7].set('val', '1')  # Show percentage for data label
+
+
+def create_APJC_QTD1(ppt,title_prefix_v07,qtd_def):
+    pt=pd.pivot_table(qtd_def,
+                          values=[BOOKING_AMOUNT],
+                          index=[SEGMENT],
+                          columns=[FISCAL_WEEK],
+                          aggfunc=np.sum,
+                          fill_value=0,)
+    slide=create_title_only_slide(ppt, title_prefix_v07)
+    chart_line_QTD(pt,slide)
+    # num_rows=len(value)
+    # num_cols=len(pt.index)
+    # table = slide.shapes.add_table(num_rows + 1,
+    #                                num_cols,
+    #                                x, y+cy,
+    #                                Inches(12.3),
+    #                                Inches(0.1)).table
+    #
+    # header=list(pt.index)
+    # cell=table.cell(0,0)
+    # set_cell_format(cell,SMALL_FONT_SIZE,True)
+    # col_width=cx/num_cols
+    # for i in range(num_cols):
+    #     table.columns[i].width=col_width
+    # for i,item in enumerate(header[:-1]):
+    #     cell=table.cell(0,i+1)
+    #     cell.text=str(item)
+    #     set_cell_format(cell,SMALL_FONT_SIZE,True)
+    # rows_value=list(pt.columns.levels[1])
+    # for i,item in enumerate(rows_value[:-1]):
+    #     cell=table.cell(i+1,0)
+    #     cell.text="WK"+str(item)
+    #     set_cell_format(cell,SMALL_FONT_SIZE)
+    # for i,item in enumerate(value[:-1]):
+    #     value_format=map(divide,item)
+    #     col=i+1
+    #     for j,value in enumerate(value_format[:-1]):
+    #         cell=table.cell(j+1,col)
+    #         cell.text=str(value)+"M"
+    #         set_cell_format(cell,SMALL_FONT_SIZE)
+    # print pt.columns
+    # print pt.index
+
+def create_APJC_QTD2(ppt,title_prefix_v08,qtd_def):
+    pt1=create_APJC_QTD_pt(qtd_def)
+    q = pt1[BOOKING_AMOUNT].map(lambda x: x>10000 or x<-10000)
+    pt=pt1[q]
+    all_level_1 = list(pt.index.get_level_values(0).unique())
+    # print all_level_1
+    sorted_sub_pts = []
+    for level1 in all_level_1:
+        if level1!="All":
+            sub_pt = pt.xs(level1, level=0)
+            sub_total = sub_pt.sum().values
+             # Filter Booking_Amount < 1000 rows out of sub pivot table
+            if not len(sub_pt):
+                continue
+            sorted_sub_pts.append((sub_total[-1], level1, sub_pt, sub_total))
+    sorted_sub_pts.sort(reverse=True)
+    sorted_sub_pts.append((None, 'GRAND TOTAL', pt1.xs('All', level=0), None))
+    parts = [[0]]
+    last_rows = 0
+    for dummy, level1, sub_pt, sub_total in sorted_sub_pts:
+        rows = len(sub_pt) + 1
+        if last_rows + rows > 30:  # Split table to new slide
+            parts[-1][0] = last_rows  # Parameter for create PPT Table
+            parts.append([rows, (level1, sub_pt, sub_total)])
+            last_rows = rows
+            continue
+
+        parts[-1].append((level1, sub_pt, sub_total))
+        last_rows += rows
+        parts[-1][0] = last_rows
+
+    if len(parts[-1]) == 2:  # Only GRAND TOTAL row
+        parts[-2].append(parts[-1][1])
+        parts[-2][0] += 2
+        parts.pop()
+    # parts=parts[1:]
+    # print parts
+    if len(parts)==1:
+        pass
+    else:
+        parts=parts[1:]
+    last_page_id = len(parts) - 1
+    for i, part in enumerate(parts):
+        slide = create_title_only_slide(ppt, title_prefix_v08, True)
+        create_table(slide, part, i == last_page_id)
+def create_APJC_YTD_pt(ytd,item,flag):
+    if flag==True:
+        pt=pd.pivot_table(ytd,
+                              values=[BOOKING_AMOUNT],
+                              index=[item],
+                              columns=[FISCAL_QUARTER,FISCAL_YEAR],
+                              aggfunc=np.sum,
+                              margins=True,
+                              fill_value=0
+                              )
+    else:
+        pt= pd.pivot_table(ytd,
+                              values=[BOOKING_AMOUNT],
+                              index=[item],
+                              columns=[FISCAL_YEAR,FISCAL_QUARTER],
+                              aggfunc=np.sum,
+                              margins=True,
+                              fill_value=0
+                              )
+    # q = pt[BOOKING_AMOUNT].map(lambda x: x >10000)
+    # q1 = pt[columns] > 10000
+    # pt1= pt[q1]
+    return pt
+def create_APJC_YTD_pt1(ytd,item):
+    pt= pd.pivot_table(ytd,
+                          values=[BOOKING_AMOUNT],
+                          columns=[item],
+                          index=[FISCAL_YEAR,FISCAL_QUARTER],
+                          aggfunc=np.sum,
+                          fill_value=0,
+                          )
+    # q = pt[BOOKING_AMOUNT].map(lambda x: x >10000)
+    return pt
+def create_APJC_YTD_PT2(year_df,item):
+    pt= pd.pivot_table(year_df,
+                          values=[BOOKING_AMOUNT],
+                          index=[item],
+                          aggfunc=np.sum,
+                          fill_value=0,
+                          margins=True
+                          )
+    q = pt[BOOKING_AMOUNT].map(lambda x: x >10000)
+    return pt[q]
+
+def create_APJC_YTD(ppt,title_prefix_v10,ytd,year_df,item):#HAVE TABLE and chart line
+    pt=create_APJC_YTD_pt(ytd,item,True)#没有求和的数据
+    pt1=create_APJC_YTD_pt1(ytd,item)
+    pt2=create_APJC_YTD_PT2(year_df,item)
+    pt.fillna(0, inplace=True)
+    row_value=list(pt.index)
+    header_temp1 = list(pt.columns.levels[1][:-1]) #
+    Q_data_len=len(header_temp1)
+    if Q_data_len == 4:
+        values_index = (0, 1, 2, 3)
+    if Q_data_len == 5:
+        values_index = (0, 4, 1, 2, 3)
+        header_temp1.insert(1,header_temp1[-1])
+        del(header_temp1[-1])
+        # print header_temp1
+    if Q_data_len == 6:
+        values_index = (0, 4, 1, 5, 2, 3)
+        header_temp1.insert(1, header_temp1[-2])
+        header_temp1.insert(3,header_temp1[-1])
+        del (header_temp1[-1])
+        del (header_temp1[-1])
+    if Q_data_len == 7:
+        values_index = (0, 4, 1, 5, 2, 6, 3)
+        header_temp1.insert(1, header_temp1[-3])
+        header_temp1.insert(3, header_temp1[-2])
+        header_temp1.insert(5, header_temp1[-1])
+        del (header_temp1[-1])
+        del (header_temp1[-1])
+        del (header_temp1[-1])
+    if Q_data_len == 8:
+        values_index = (0, 4, 1, 5, 2, 6, 3, 7)
+        header_temp1.insert(1, header_temp1[-4])
+        header_temp1.insert(3, header_temp1[-3])
+        header_temp1.insert(5, header_temp1[-2])
+        del (header_temp1[-2])
+        del (header_temp1[-2])
+        del (header_temp1[-2])
+    header_temp2=["YOY%Q1","YOY%Q2","YOY%Q3","YOY%Q4","FY16","FY17","YOY%"]
+    headers=[]
+    headers.extend(header_temp1)
+    headers.extend(header_temp2)
+    # print headers
+    values1 = pt.values
+    values=np.delete(values1,-1,1)
+    # print values
+    num_rows = len(values)
+    num_cols = len(header_temp1)
+
+    slide = create_title_only_slide(ppt, title_prefix_v10,True)
+    table = slide.shapes.add_table(num_rows + 1,
+                                   num_cols+8 ,
+                                   T_LEFT, T_TOP,
+                                   Inches(12.3),
+                                   Inches(0.1)).table
+    col_width = (12.3) / (num_cols+8)
+    cell=table.cell(0,0)
+    set_cell_format(cell, TINY_FONT_SIZE, True)
+    for i, h in enumerate(headers):
+        table.columns[i].width = Inches(col_width)
+        cell = table.cell(0, i+1)
+        cell.text = str(h)
+        set_cell_format(cell, TINY_FONT_SIZE, True)
+    for i, h in enumerate(row_value):
+        cell = table.cell(i+1, 0)
+        cell.text = h
+        set_cell_format(cell, TINY_FONT_SIZE)
+    cell=table.cell(num_rows,0)
+    cell.text="Grand Total"
+    set_cell_format(cell, TINY_FONT_SIZE, True)
+
+    for row_id in range(num_rows):
+        for col_id,item in enumerate(values_index):
+            cell = table.cell(row_id + 1, col_id+1)
+            cell.text='{:,.0f}'.format(values[row_id][item])
+            set_cell_format(cell, TINY_FONT_SIZE)
+    for row_id in range(num_rows):
+        for col_id in range(4):
+            if values[row_id][col_id]==0:
+                YOY_VALUE="0%"
+            else:
+                try:
+                    YOY_VALUE=str((round(float((values[row_id][col_id+4]-values[row_id][col_id]))/values[row_id][col_id],2))*100)+"%"
+                except:
+                    YOY_VALUE="-100%"
+            cell=table.cell(row_id+1,col_id+num_cols+1)
+            cell.text=YOY_VALUE
+            set_cell_format(cell, TINY_FONT_SIZE)
+    for row_id in range(num_rows):
+        fy15_total=0
+        fy16_total=0
+        for col_id in range(4):
+            fy15_total=values[row_id][col_id]+fy15_total
+        for item in range(4,Q_data_len):
+            fy16_total=values[row_id][item]+fy16_total
+        try:
+            YOY_TOTAL=str((round(float((fy16_total-fy15_total))/fy15_total,2))*100)+"%"
+        except:
+            YOY_TOTAL="0%"
+        cell=table.cell(row_id+1,len(header_temp1)+5)
+        cell.text='{:,.0f}'.format(fy15_total)
+        set_cell_format(cell, TINY_FONT_SIZE)
+        cell=table.cell(row_id+1,len(header_temp1)+6)
+        cell.text='{:,.0f}'.format(fy16_total)
+        set_cell_format(cell, TINY_FONT_SIZE)
+        cell=table.cell(row_id+1,len(header_temp1)+7)
+        cell.text=YOY_TOTAL
+        set_cell_format(cell, TINY_FONT_SIZE)
+    for i in range(num_cols+8):
+        cell=table.cell(num_rows,i)
+        set_cell_format(cell, TINY_FONT_SIZE, True)
+    chart_line(pt1,slide)
+    create_pie_chart(slide,pt2)
+def create_APJC_one(ppt,ytd,item,title_prefix_v10,flag=True):#create yoy% only level
+    pt=create_APJC_YTD_pt(ytd,item,flag)
+    pt.fillna(0, inplace=True)
+    value=pt.values
+    num_rows=len(value)
+    x=0
+    while x <num_rows: #page
+      j=x+22
+      if j<num_rows:
+          pt1=pt[x:j]
+          create_APJC_one_for(pt1,ppt,title_prefix_v10)
+      else :
+          pt2=pt[x:num_rows]
+          flag=False
+          create_APJC_one_for(pt2,ppt,title_prefix_v10,flag)
+      x=j
+def create_APJC_one_for(pt,ppt,title_prefix_v10,flag=True):
+    pt.fillna(0, inplace=True)
+    values=pt.values
+    value1=np.delete(values,-1,1)
+    num_rows=len(values)
+    row_value=list(pt.index)
+    levels = list(pt.columns.levels)
+    for level in levels:
+        level=list(level)
+        if len(level)>3 :
+            headers1=level
+    headers=[]
+    for item in headers1:
+        if item!="" and item!="All":
+            headers.append(item)
+
+    q_data_len=len(headers)
+    header_temp=["YOY%Q1","YOY%Q2","YOY%Q3","YOY%Q4","FY16","FY17","YOY%"]
+    # print headers
+    if q_data_len == 4:
+        value_index = (0, 1, 2, 3)
+        headers.extend(header_temp)
+    if q_data_len == 5:
+        value_index = (0, 4, 1, 2, 3)
+        headers.insert(1, headers[-1])
+        del headers[-1]
+        headers.extend(header_temp)
+    if q_data_len == 6:
+        value_index = (0, 4, 1, 5, 2, 3)
+        headers.insert(1, headers[-2])
+        headers.insert(3, headers[-1])
+        del headers[-1]
+        del headers[-1]
+        headers.extend(header_temp)
+    if q_data_len == 7:
+        value_index = (0, 4, 1, 5, 2, 6, 3)
+        headers.insert(1, headers[-3])
+        headers.insert(3, headers[-2])
+        headers.insert(5, headers[-1])
+        del headers[-1]
+        del headers[-1]
+        del headers[-1]
+        headers.extend(header_temp)
+    if q_data_len == 8:
+        value_index = (0, 4, 1, 5, 2, 6, 3, 7)
+        headers.insert(1, headers[-4])
+        headers.insert(3, headers[-3])
+        headers.insert(5, headers[-2])
+        del headers[-2]
+        del headers[-2]
+        del headers[-2]
+        headers.extend(header_temp)
+    num_cols = q_data_len+8
+    slide = create_title_only_slide(ppt, title_prefix_v10)
+    table = slide.shapes.add_table(num_rows + 1,
+                                   num_cols ,
+                                   T_LEFT, T_TOP,
+                                   Inches(12.3),
+                                   Inches(0.1)).table
+    col_width = (12.3) / (num_cols)
+    table.columns[0].width = Inches(1.0)
+    cell=table.cell(0,0)
+    set_cell_format(cell, TINY_FONT_SIZE, True)
+
+    for i, h in enumerate(headers):
+        table.columns[i+1].width = Inches(col_width)
+        cell = table.cell(0, i+1)
+        cell.text = str(h)
+        set_cell_format(cell, TINY_FONT_SIZE, True)
+    for i, h in enumerate(row_value):
+        cell = table.cell(i+1, 0)
+        cell.text = h
+        set_cell_format(cell, TINY_FONT_SIZE)
+    for row_id in range(num_rows):
+        for col_id,item in enumerate(value_index):
+            cell = table.cell(row_id + 1, col_id+1)
+            cell.text='{:,.0f}'.format(values[row_id][item])
+            set_cell_format(cell, TINY_FONT_SIZE)
+    for row_id in range(num_rows):
+        for col_id in range(4):
+            if values[row_id][col_id]==0:
+                YOY_VALUE=str(0)+"%"
+            else:
+                try :
+                    YOY_VALUE=str((round(float((value1[row_id][col_id+4]-value1[row_id][col_id]))/value1[row_id][col_id],2))*100)+"%"
+                except:
+                    YOY_VALUE="-100%"
+            cell=table.cell(row_id+1,col_id+q_data_len+1)
+            cell.text=YOY_VALUE
+            set_cell_format(cell, TINY_FONT_SIZE)
+    for row_id in range(num_rows):
+        fy15_total=0
+        for col_id in range(4):
+            fy15_total=values[row_id][col_id]+fy15_total
+        fy16_total=values[row_id][-1]-fy15_total
+        if fy15_total==0:
+            YOY_TOTAL=str(0)+"%"
+        else:
+            YOY_TOTAL=str((round(float((fy16_total-fy15_total))/fy15_total,2))*100)+"%"
+        cell=table.cell(row_id+1,q_data_len+5)
+        cell.text='{:,.0f}'.format(fy15_total)
+        set_cell_format(cell, TINY_FONT_SIZE)
+        cell=table.cell(row_id+1,q_data_len+6)
+        cell.text='{:,.0f}'.format(fy16_total)
+        set_cell_format(cell, TINY_FONT_SIZE)
+        cell=table.cell(row_id+1,q_data_len+7)
+        cell.text=YOY_TOTAL
+        set_cell_format(cell, TINY_FONT_SIZE)
+    if flag==True:
+        pass
+    else:
+        cell=table.cell(num_rows,0)
+        cell.text="Grand Total"
+        set_cell_format(cell, TINY_FONT_SIZE, True)
+        for i in range(num_cols):
+            cell=table.cell(num_rows,i)
+            set_cell_format(cell, TINY_FONT_SIZE, True)
+def chart_line_QTD(pt,slide):
+    pt=pt.T
+    x, y, cx, cy = Inches(1), Inches(1), Inches(10), Inches(3.5)
+    cat = [c for c in pt.columns]
+    pt_line_value=pt.values
+    chart_data = ChartData()
+    chart_data.categories = cat
+    for i in range(len(pt_line_value)):
+        chart_data.add_series('WK%s'%(list(pt.index.levels[1])[i]),  map(divide,list(pt_line_value[i])))
+    graphic_frame = slide.shapes.add_chart(
+    XL_CHART_TYPE.COLUMN_CLUSTERED, x, y, cx, cy, chart_data
+    )
+    chart = graphic_frame.chart
+    value_axis = chart.value_axis
+    tick_labels = value_axis.tick_labels
+    tick_labels.number_format = '0.00"M"'
+    tick_labels.font.bold = True
+    tick_labels.font.size = Pt(10)
+    value_axis1 = chart.category_axis
+    tick_labels1 = value_axis1.tick_labels
+    tick_labels1.font.bold = True
+    tick_labels1.font.size = Pt(10)
+    chart.has_legend = True
+    chart.legend.position = XL_LEGEND_POSITION.BOTTOM
+    chart.legend.include_in_layout = False
+    chart.legend.font.blod=True
+    chart.legend.font.size=Pt(10)
+    SMALL_FONT_SIZE_qtd=Pt(10)
+    value=pt.values
+    num_cols=len(value)
+    num_rows=len(pt.columns)
+    table = slide.shapes.add_table(num_rows+1,
+                                   num_cols+1,
+                                   x, y+cy,
+                                   Inches(12.3),
+                                   Inches(0.1)).table
+
+    header=list(pt.index.levels[1])
+    cell=table.cell(0,0)
+    set_cell_format(cell,SMALL_FONT_SIZE_qtd,True)
+    col_width=cx/(num_cols+1)-Inches(0.1)
+    for i in range(num_cols+1):
+        table.columns[i].width=col_width
+    for i,item in enumerate(header):
+        cell=table.cell(0,i+1)
+        cell.text=str(item)
+        set_cell_format(cell,SMALL_FONT_SIZE_qtd,True)
+    rows_value=list(pt.columns)
+    for i,item in enumerate(rows_value):
+        cell=table.cell(i+1,0)
+        cell.text=str(item)
+        set_cell_format(cell,SMALL_FONT_SIZE_qtd)
+    for i,item in enumerate(value):
+        value_format=map(divide,item)
+        col=i+1
+        for j,value in enumerate(value_format):
+            cell=table.cell(j+1,col)
+            cell.text=str(value)+"M"
+            set_cell_format(cell,SMALL_FONT_SIZE_qtd)
+
+
+def chart_line(pt,slide):
+    pt_line=pt.T
+    cat=list(pt.index.levels[1])
+    pt_line_value=pt_line.values
+    chart_data = ChartData()
+    chart_data.categories = cat
+    for i in range(len(pt_line_value)):
+        chart_data.add_series(list(pt.columns.levels[1])[i],  map(divide,list(pt_line_value[i])))
+
+    x, y, cx, cy = T_LEFT, Inches(4.3), Inches(7.0), Inches(2.3)
+    chart = slide.shapes.add_chart(
+        XL_CHART_TYPE.LINE, x, y, cx, cy, chart_data
+    ).chart
+    chart.has_legend = True
+    chart.legend.include_in_layout = False
+    chart.series[0].smooth = True
+    value_axis = chart.value_axis
+    tick_labels = value_axis.tick_labels
+    tick_labels.number_format = '0.00"M"'
+    tick_labels.font.bold = True
+    tick_labels.font.size = Pt(7)
+    value_axis1 = chart.category_axis
+    tick_labels1 = value_axis1.tick_labels
+    tick_labels1.font.bold = True
+    tick_labels1.font.size = Pt(7)
+    chart.has_legend = True
+    chart.legend.position = XL_LEGEND_POSITION.RIGHT
+    chart.legend.include_in_layout = False
+    chart.legend.font.blod=True
+    chart.legend.font.size=Pt(7)
+    #添加线性图下面的表格
+    # value=pt.values
+    # num_cols=len(value)
+    # num_rows=len(pt.columns.levels[1])
+    # table = slide.shapes.add_table(num_rows+1,
+    #                                num_cols+1,
+    #                                x, y+cy,
+    #                                Inches(12.3),
+    #                                Inches(0.1)).table
+    #
+    # header=list(pt.index.levels[1])
+    # cell=table.cell(0,0)
+    # set_cell_format(cell,SMALL_FONT_SIZE,True)
+    # col_width=cx/(num_cols+1)-Inches(0.1)
+    # for i in range(num_cols+1):
+    #     table.columns[i].width=col_width
+    # for i,item in enumerate(header):
+    #     cell=table.cell(0,i+1)
+    #     cell.text=str(item)
+    #     set_cell_format(cell,SMALL_FONT_SIZE,True)
+    # rows_value=list(pt.columns.levels[1])
+    # for i,item in enumerate(rows_value):
+    #     cell=table.cell(i+1,0)
+    #     cell.text=str(item)
+    #     set_cell_format(cell,SMALL_FONT_SIZE_SMLL)
+    # for i,item in enumerate(value):
+    #     value_format=map(divide,item)
+    #     col=i+1
+    #     for j,value in enumerate(value_format):
+    #         cell=table.cell(j+1,col)
+    #         cell.text=str(value)+"M"
+    #         set_cell_format(cell,SMALL_FONT_SIZE_SMLL)
+
+
+
+
+def create_APJC_Double(ppt,title_prefix_v11,ytd,columns1,columns2,flag=True):
+    if flag==True:
+        pt=pd.pivot_table(ytd,
+                              values=[BOOKING_AMOUNT],
+                              index=[columns1,columns2],
+                              columns=[FISCAL_YEAR,FISCAL_QUARTER],
+                              aggfunc=np.sum,
+                              fill_value=0,
+                              margins=True
+                              )
+    else:
+        pt=pd.pivot_table(ytd,
+                              values=[BOOKING_AMOUNT],
+                              index=[columns1,columns2],
+                              columns=[FISCAL_YEAR,FISCAL_QUARTER],
+                              aggfunc=np.sum,
+                              fill_value=0,
+                              margins=True
+                              )
+
+    pt.fillna(0, inplace=True)
+    all_level_1 = list(pt.index.get_level_values(0).unique())
+    # print all_level_1
+    sorted_sub_pts = []
+    for level1 in all_level_1[:-1]:
+        # print level1
+        sub_pt = pt.xs(level1, level=0)
+        sub_total1 = sub_pt.sum().values
+        # print sub_total[:-1][0]
+        sub_total = np.delete(sub_total1, -1,0)
+        if not len(sub_pt):
+            continue
+        sorted_sub_pts.append((sub_total1[-1], level1, sub_pt, sub_total))
+    sorted_sub_pts.append((None, 'GRAND TOTAL', pt.xs('All', level=0), None))
+
+    parts = [[0]]
+    last_rows = 0
+    for dummy, level1, sub_pt, sub_total in sorted_sub_pts:
+        rows = len(sub_pt) + 1
+
+        if last_rows + rows > MAX_ROWS:  # Split table to new slide
+            parts[-1][0] = last_rows  # Parameter for create PPT Table
+            parts.append([rows, (level1, sub_pt, sub_total)])
+            last_rows = rows
+            continue
+        parts[-1].append((level1, sub_pt, sub_total))
+        last_rows += rows
+        parts[-1][0] = last_rows
+
+    if len(parts[-1]) == 2:  # Only GRAND TOTAL row
+        parts[-2].append(parts[-1][1])
+        parts[-2][0] += 2
+        parts.pop()
+
+    last_page_id = len(parts) - 1
+    for i, part in enumerate(parts):
+        slide = create_title_only_slide(ppt, title_prefix_v11)
+        create_table_update(slide, part, i == last_page_id)
+def create_table_update1(slide, part, is_last_page=False):
+    font_size = SMALL_FONT_SIZE
+    if is_last_page:
+        cats = part[1:-1]
+        rows = part[0]+1
+    else:
+        cats = part[1:]
+        rows = part[0] + 2
+        # print rows
+
+    index_names = part[1][1][0][1].index.names
+    levles=list(part[1][1][0][1].columns.levels)
+    for levle in levles:
+        levle=list(levle)
+        if len(levle)>3:
+            headers1=levle
+    headers=[]
+    for item in headers1:
+        if item!="" and item!="All":
+            headers.append(item)
+
+    col_levels =len(headers)
+    col_name = part[1][1][0][1].columns.name
+    col_offset = len(index_names)
+    span = col_levels
+    cols = span + col_offset+1
+    header_temp =["YOY%Q1", "YOY%Q2", "YOY%Q3", "YOY%Q4", "FY16", "FY17", "YOY%"]
+    # print headers
+    if span == 4:
+        value_index = (0, 1, 2, 3)
+        headers.extend(header_temp)
+    if span== 5:
+        value_index = (0, 4, 1, 2, 3)
+        headers.insert(1, headers[-1])
+        del headers[-1]
+        headers.extend(header_temp)
+    if span== 6:
+        value_index = (0, 4, 1, 5, 2, 3)
+        headers.insert(1, headers[-2])
+        headers.insert(3, headers[-1])
+        del headers[-1]
+        del headers[-1]
+        headers.extend(header_temp)
+    if span == 7:
+        value_index = (0, 4, 1, 5, 2, 6, 3)
+        headers.insert(1, headers[-3])
+        headers.insert(3, headers[-2])
+        headers.insert(5, headers[-1])
+        del headers[-1]
+        del headers[-1]
+        del headers[-1]
+        headers.extend(header_temp)
+    if span == 8:
+        value_index = (0, 4, 1, 5, 2, 6, 3, 7)
+        headers.insert(1, headers[-4])
+        headers.insert(3, headers[-3])
+        headers.insert(5, headers[-2])
+        del headers[-2]
+        del headers[-2]
+        del headers[-2]
+        headers.extend(header_temp)
+    table = slide.shapes.add_table(rows-1, span+8, T_LEFT, T_TOP, Inches(10), Inches(1)).table
+    table.first_row = False
+
+    # set column widths
+    table.columns[0].width = Inches(0.8)
+    w_col = Inches(10.0 / (span+7))
+    for i in range(1, cols):
+        table.columns[i].width = w_col
+    #write table header
+    table.cell(0, col_offset - 1).text = str(col_name)
+    for i in range(span+7):
+         table.cell(0, col_offset + i).text = str(headers[i])
+
+    r = table.rows[0]
+    for c in r.cells:
+        set_cell_format(c, font_size, True, True)
+    r = table.rows[1]
+    for c in r.cells:
+        set_cell_format(c, font_size, True)
+
+    start_row_idx = 1
+    for cat, sub_pt, sub_total in cats:
+        # num_sub_rows = len(sub_pt)
+        cell = table.cell(start_row_idx, 0)
+        cell.text = cat
+        set_cell_format(cell, font_size, 2)
+        for i, total in enumerate(value_index, start=col_offset):
+            cell = table.cell(start_row_idx, i)
+            try :
+                cell.text = '{:,.0f}'.format(sub_total[total])
+            except:
+                cell.text = '{:,.0f}'.format(0)
+            set_cell_format(cell, font_size, 2, True)
+        for i in range(4):
+            cell=table.cell(start_row_idx,i+span+1)
+            if sub_total[i]==0:
+                YOY=str(0)+"%"
+            else:
+               try:
+                   YOY=str(round(float((sub_total[i+4]-sub_total[i]))/sub_total[i],2)*100)+"%"
+               except:
+                   YOY="-100%"
+            cell.text=YOY
+            set_cell_format(cell, font_size, 2, True)
+        fy15_total=0
+        fy16_total=0
+        for i in range(4):
+            fy15_total=fy15_total+sub_total[i]
+        for i in range(4,span):
+            fy16_total=fy16_total+sub_total[i]
+
+        cell=table.cell(start_row_idx,span+5)
+        cell.text = '{:,.0f}'.format(fy15_total)
+        set_cell_format(cell, font_size, 2, True)
+        cell=table.cell(start_row_idx,span+6)
+        cell.text = '{:,.0f}'.format(fy16_total)
+        set_cell_format(cell, font_size, 2, True)
+        cell=table.cell(start_row_idx,span+7)
+        if fy15_total==0:
+            fy_YOY=str(0)+"%"
+        else:
+            fy_YOY=str(round(float((fy16_total-fy15_total))/fy15_total,2)*100)+"%"
+        cell.text=fy_YOY
+        set_cell_format(cell, font_size, 2, True)
+
+        start_row_idx +=1
+        for item in sub_pt:
+            # print item
+            num_sub_rows=len(item[1])+1
+            sub_index = item[1].index
+            sub_values = item[1].values
+            dummy = [v[-1] for v in sub_values]
+            sorted_rows = sorted(zip(sub_index, sub_values, dummy),
+                             key=itemgetter(-1),
+                             reverse=True)
+            cell = table.cell(start_row_idx, 0)
+            cell.text = str(item[0])
+            for i in range(cols+6):
+                cell=table.cell(start_row_idx, i)
+                set_cell_format(cell, font_size, 1, True)
+            # start_row_idx += 1
+            for i, r in enumerate(sorted_rows):
+                rr = np.delete(r[1], -1, 0)
+                cell = table.cell(start_row_idx + (i+1), 0)
+                cell.text = str(r[0])
+                # print r[0]
+                set_cell_format(cell, font_size)
+
+                for j, c in enumerate(value_index):
+                    cell = table.cell(start_row_idx + (i+1), col_offset + j)
+                    set_cell_format(cell, font_size, 0, True)
+                    try:
+                       cell.text = '{:,.0f}'.format(r[1][:-1][c])
+                    except ValueError:
+                       cell.text =r[1][:-1][c]
+                for m in range(4):
+                    cell=table.cell(start_row_idx+(i+1),m+span+1)
+                    if r[1][m]==0:
+                        YOY=str(0)+"%"
+                    else:
+                        try:
+                            YOY=str(round(float((rr[m+4]-rr[m]))/rr[m],2)*100)+"%"
+                        except:
+                            YOY="-100%"
+                    cell.text=YOY
+                    set_cell_format(cell, font_size, 0, True)
+                fy15_total=0
+                for n in range(4):
+                    fy15_total=fy15_total+r[1][n]
+                fy16_total=r[1][-1]-fy15_total
+                cell=table.cell(start_row_idx+(i+1),span+5)
+                cell.text = '{:,.0f}'.format(fy15_total)
+                set_cell_format(cell, font_size, 0, True)
+                cell=table.cell(start_row_idx+(i+1),span+6)
+                cell.text = '{:,.0f}'.format(fy16_total)
+                set_cell_format(cell, font_size, 0, True)
+                cell=table.cell(start_row_idx+(i+1),span+7)
+                if fy15_total==0:
+                    fy_YOY=str(0)+"%"
+                else:
+                    fy_YOY=str(round(float((fy16_total-fy15_total))/fy15_total,2)*100)+"%"
+                cell.text=fy_YOY
+                set_cell_format(cell, font_size, 0, True)
+
+
+            start_row_idx += num_sub_rows
+
+    if is_last_page:
+        cat, sub_pt, sub_total = part[-1]
+        # print start_row_idx
+        cell = table.cell(start_row_idx, 0)
+        cell.text = cat
+        set_cell_format(cell, font_size, 1)
+        sub_values = sub_pt[0][1].values
+        sub_values1=np.delete(sub_values,-1,1)
+        for i, total in enumerate(value_index, start=col_offset):
+            cell = table.cell(start_row_idx, i)
+            cell.text = '{:,.0f}'.format(sub_values[0][total])
+            set_cell_format(cell, font_size, 1, True)
+        for m in range(4):
+            cell=table.cell(start_row_idx,m+span+1)
+            if sub_values[0][m]==0:
+                YOY=str(0)+"%"
+            else:
+               try:
+                    YOY=str(round(float((sub_values1[0][m+4]-r[1][m]))/sub_values1[0][m],2)*100)+"%"
+               except:
+                   YOY="-100%"
+            cell.text=YOY
+            set_cell_format(cell, font_size, 1, True)
+        fy15_total=0
+        for n in range(4):
+            fy15_total=fy15_total+sub_values[0][n]
+        fy16_total=sub_values[0][-1]-fy15_total
+        cell=table.cell(start_row_idx,span+5)
+        cell.text = '{:,.0f}'.format(fy15_total)
+        set_cell_format(cell, font_size, 1, True)
+        cell=table.cell(start_row_idx,span+6)
+        cell.text = '{:,.0f}'.format(fy16_total)
+        set_cell_format(cell, font_size, 1, True)
+        cell=table.cell(start_row_idx,span+7)
+        if fy15_total==0:
+            fy_YOY=str(0)+"%"
+        else:
+            fy_YOY=str(round(float((fy16_total-fy15_total))/fy15_total,2)*100)+"%"
+        cell.text=fy_YOY
+        set_cell_format(cell, font_size, 1, True)
+
+
+def create_APJC_ACI(ppt,ACI_SIO_ytd,title):
+    pt=pd.pivot_table(ACI_SIO_ytd,
+                          values=[BOOKING_AMOUNT],
+                          index=[COUNTRY,Normalized_Customer_Name,PART_ID],
+                          columns=[FISCAL_QUARTER,FISCAL_WEEK],
+                          aggfunc=np.sum,
+                          fill_value=0,
+                          margins=True)
+    all_level_11 = list(pt.index.get_level_values(0).unique())
+    # all_level_2=list(pt.index.get_level_values(1).unique())
+    # print all_level_2
+    # all_level_11 = [r for r in  all_level_1 if r != 'All']
+
+    sorted_sub_pts = []
+    for level1 in all_level_11[:-1]:
+        # print level1
+        sub_pt = pt.xs(level1, level=0)
+        # print sub_pt
+        sub_total = sub_pt.sum().values
+        sorted_sub_pts.append((sub_total[-1], level1, sub_pt, sub_total))
+    sorted_sub_pts.sort(reverse=True)
+
+    sorted_sub_pts.append((None, 'GRAND TOTAL', pt.xs('All', level=0), None))
+
+    parts = [[0]]
+    last_rows = 0
+    for dummy, level1, sub_pt, sub_total in sorted_sub_pts:
+        rows = len(sub_pt) + 1
+        if last_rows + rows > MAX_ROWS1:  # Split table to new slide
+            parts[-1][0] = last_rows  # Parameter for create PPT Table
+            parts.append([rows, (level1, sub_pt, sub_total)])
+            last_rows = rows
+            continue
+        parts[-1].append((level1, sub_pt, sub_total))
+        last_rows += rows
+        parts[-1][0] = last_rows
+    if len(parts[-1]) == 2:  # Only GRAND TOTAL row
+        parts[-2].append(parts[-1][1])
+        parts[-2][0] += 2
+        parts.pop()
+
+    last_page_id = len(parts) - 1
+    for i, part in enumerate(parts):
+        slide = create_title_only_slide(ppt, title)
+        create_table_aci(slide, part, i == last_page_id)
+def create_table_aci(slide, part, is_last_page=False):
+    font_size = SMALL_FONT_SIZE
+    if is_last_page:
+        cats = part[1:-1]
+        rows = part[0] + 1
+    else:
+        cats = part[1:]
+        rows = part[0] + 2
+
+    index_names = part[1][1].index.names
+    col_levels = part[1][1].columns
+    col_name = part[1][1].columns.name
+    col_offset = len(index_names)
+    span = len(col_levels)
+    cols = span + col_offset
+    table = slide.shapes.add_table(rows, cols, T_LEFT, T_TOP, Inches(2), Inches(1)).table
+    table.first_row = False
+
+    # set column widths
+    table.columns[0].width = Inches(1.5)
+    table.columns[1].width = Inches(1.5)
+    # w_col = Inches(20 / span)
+    for i in range(2, cols):
+        table.columns[i].width = Inches(1)
+    #write table header
+    table.cell(0, col_offset - 1).text = str(col_name)
+    for i in range(span - 1):
+        header=col_levels[i]
+        header1=str(header[1])+" wk"+str(header[2])
+        header2= header1.split(",")[1]
+        table.cell(0, col_offset + i).text = header2
+    table.cell(0, col_offset + span - 1).text = 'TOTAL'
+    for i in range(col_offset):
+        field_name = index_names[i]
+        table.cell(1, i).text = field_name
+
+    # format header
+    r = table.rows[0]
+    for c in r.cells:
+        set_cell_format(c, font_size, True, True)
+    r = table.rows[1]
+    for c in r.cells:
+        set_cell_format(c, font_size, True)
+    start_row_idx = 2
+    for cat, sub_pt, sub_total in cats:
+        num_sub_rows = len(sub_pt)
+        cell = table.cell(start_row_idx, 0)
+        cell.text = cat
+        set_cell_format(cell, font_size, 2)
+        cell = table.cell(start_row_idx, 1)
+        set_cell_format(cell, font_size, 2)
+        for i, total in enumerate(sub_total, start=col_offset):
+            cell = table.cell(start_row_idx, i)
+            cell.text = '{:,.0f}'.format(total)
+            set_cell_format(cell, font_size, 2, True)
+
+        start_row_idx += 1
+        sub_index = sub_pt.index
+        sub_values = sub_pt.values
+        dummy = [v[-1] for v in sub_values]
+        sorted_rows = sorted(zip(sub_index, sub_values, dummy),
+                             key=itemgetter(-1),
+                             reverse=True)
+        for i, r in enumerate(sorted_rows):
+            cell = table.cell(start_row_idx + i, 0)
+            cell.text = str(r[0][0])
+            set_cell_format(cell, font_size)
+            cell = table.cell(start_row_idx + i, 1)
+            cell.text = str(r[0][1])
+            set_cell_format(cell, font_size)
+            for j, c in enumerate(r[1]):
+                cell = table.cell(start_row_idx + i, col_offset + j)
+                set_cell_format(cell, font_size, 0, True)
+                try:
+                    cell.text = '{:,.0f}'.format(c)
+                except ValueError:
+                    cell.text = c
+        start_row_idx += num_sub_rows
+
+    if is_last_page:
+        cat, sub_pt, sub_total = part[-1]
+        cell = table.cell(start_row_idx, 0)
+        cell.text = cat
+        set_cell_format(cell, font_size, 1)
+        cell = table.cell(start_row_idx, 1)
+        set_cell_format(cell, font_size, 1)
+        sub_values = sub_pt.values
+        for i, total in enumerate(sub_values[0], start=col_offset):
+            cell = table.cell(start_row_idx, i)
+            cell.text = '{:,.0f}'.format(total)
+            set_cell_format(cell, font_size, 1, True)
+def create_aci_top_pt(ACI_SIO_ytd1,qtr_str,flag=True):
+    m0=ACI_SIO_ytd1[FISCAL_QUARTER].map(lambda x: x ==qtr_str)
+    m1=ACI_SIO_ytd1[SL1].map(lambda x:x=="UI")
+    m2=ACI_SIO_ytd1[SL2].map(lambda x:x=="ACI")
+    ACI_SIO_ytd_TOP1=ACI_SIO_ytd1[m0&m1&m2]
+    ACI_SIO_ytd_TOP2=ACI_SIO_ytd1[m1&m2]
+    if flag==True:
+        pt=pd.pivot_table(ACI_SIO_ytd_TOP1,
+                              values=[BOOKING_AMOUNT],
+                              index=[Normalized_Customer_Name],
+                              aggfunc=np.sum,
+                              fill_value=0,
+                              margins=True)
+        pt1=pd.pivot_table(ACI_SIO_ytd_TOP2,
+                              values=[BOOKING_AMOUNT],
+                              index=[Normalized_Customer_Name],
+                              aggfunc=np.sum,
+                              fill_value=0,
+                              margins=True)
+        sub_pt1=pt[:-1].sort(columns=[BOOKING_AMOUNT], ascending=[0])
+        sub_pt2=sub_pt1.head(10)
+        sub_pt11=pt1[:-1].sort(columns=[BOOKING_AMOUNT], ascending=[0])
+        sub_pt22=sub_pt11.head(10)
+    else:
+        pt=pd.pivot_table(ACI_SIO_ytd_TOP1,
+                              values=[ANNUAL_AMOUNT],
+                              index=[Normalized_Customer_Name],
+                              aggfunc=np.sum,
+                              fill_value=0,
+                              margins=True)
+        pt1=pd.pivot_table(ACI_SIO_ytd_TOP2,
+                              values=[ANNUAL_AMOUNT],
+                              index=[Normalized_Customer_Name],
+                              aggfunc=np.sum,
+                              fill_value=0,
+                              margins=True)
+        sub_pt1=pt[:-1].sort(columns=[ANNUAL_AMOUNT], ascending=[0])
+        sub_pt2=sub_pt1.head(10)
+        sub_pt11=pt1[:-1].sort(columns=[ANNUAL_AMOUNT], ascending=[0])
+        sub_pt22=sub_pt11.head(10)
+    return sub_pt2,sub_pt22
+def create_aci_top(ppt,title3,sub_pt2,sub_pt22,title):
+    sub_total = sub_pt2.sum().values
+    sub_total2 = sub_pt22.sum().values
+    cat = [c for c in sub_pt2.index]
+    ser = [s[0] for s in sub_pt2.values]
+    sorted_rows = sorted(zip(cat, ser), key=itemgetter(-1), reverse=1)
+    field_name = sub_pt2.index.names[0]
+    sorted_rows.insert(0, (field_name, 'TOTAL'))
+    sorted_rows.append(('GRAND TOTAL', sub_total[0]))
+    num_rows = len(sorted_rows)
+    # top = Inches(3.75 - (num_rows + 1) * 0.14)
+    slide=create_title_only_slide(ppt, title3)
+    table = slide.shapes.add_table(num_rows, 2, T_LEFT, T_TOP, C_WIDTH, Inches(1)).table
+    table.first_row = False
+    table.columns[0].width = Inches(4.0)
+    table.columns[1].width = Inches(1.5)
+    for i, (c, s) in enumerate(sorted_rows):
+        r = table.rows[i]
+        header = 0
+        if i == 0 or i == len(sorted_rows) - 1:
+            header = 1
+        cell = r.cells[0]
+        set_cell_format(cell, SMALL_FONT_SIZE, header, False)
+        cell.text = c
+        cell = r.cells[1]
+        set_cell_format(cell, SMALL_FONT_SIZE, header, True)
+        try:
+            cell.text = '{:,.0f}'.format(s)
+        except ValueError:
+            cell.text = str(s)
+
+    top=Inches(2.9)
+    txBox = slide.shapes.add_textbox(T_LEFT, top, Inches(0.9), Inches(0.1))
+    tf = txBox.text_frame
+    p = tf.add_paragraph()
+    p.text = title
+    p.font.size = Pt(30)
+    #add second table
+    cat = [c for c in sub_pt22.index]
+    ser = [s[0] for s in sub_pt22.values]
+    sorted_rows = sorted(zip(cat, ser), key=itemgetter(-1), reverse=1)
+    field_name = sub_pt22.index.names[0]
+    sorted_rows.insert(0, (field_name, 'TOTAL'))
+    sorted_rows.append(('GRAND TOTAL', sub_total2[0]))
+    num_rows = len(sorted_rows)
+    table1 = slide.shapes.add_table(num_rows, 2, T_LEFT, top+Inches(1), C_WIDTH, Inches(1)).table
+    table1.first_row = False
+    table1.columns[0].width = Inches(4.0)
+    table1.columns[1].width = Inches(1.5)
+    for i, (c, s) in enumerate(sorted_rows):
+        r = table1.rows[i]
+        header = 0
+        if i == 0 or i == len(sorted_rows) - 1:
+            header = 1
+        cell = r.cells[0]
+        set_cell_format(cell, SMALL_FONT_SIZE, header, False)
+        cell.text = c
+        cell = r.cells[1]
+        set_cell_format(cell, SMALL_FONT_SIZE, header, True)
+        try:
+            cell.text = '{:,.0f}'.format(s)
+        except ValueError:
+            cell.text = str(s)
+
+def create_ui_top_pt(UI_OPT_ytd,qtr_str,item,flag=True):
+    m0=UI_OPT_ytd[FISCAL_QUARTER].map(lambda x: x ==qtr_str)
+    m1=UI_OPT_ytd[SL1].map(lambda x:x==item)
+    ACI_SIO_ytd_TOP1=UI_OPT_ytd[m0&m1]
+    ACI_SIO_ytd_TOP2=UI_OPT_ytd[m1]
+    if flag==True:
+        pt=pd.pivot_table(ACI_SIO_ytd_TOP1,
+                              values=[BOOKING_AMOUNT],
+                              index=[Normalized_Customer_Name],
+                              aggfunc=np.sum,
+                              fill_value=0,
+                              margins=True)
+        pt1=pd.pivot_table(ACI_SIO_ytd_TOP2,
+                              values=[BOOKING_AMOUNT],
+                              index=[Normalized_Customer_Name],
+                              aggfunc=np.sum,
+                              fill_value=0,
+                              margins=True)
+        sub_pt1=pt[:-1].sort(columns=[BOOKING_AMOUNT], ascending=[0])
+        sub_pt2=sub_pt1.head(10)
+        sub_pt11=pt1[:-1].sort(columns=[BOOKING_AMOUNT], ascending=[0])
+        sub_pt22=sub_pt11.head(10)
+    else:
+        pt=pd.pivot_table(ACI_SIO_ytd_TOP1,
+                              values=[ANNUAL_AMOUNT],
+                              index=[Normalized_Customer_Name],
+                              aggfunc=np.sum,
+                              fill_value=0,
+                              margins=True)
+        pt1=pd.pivot_table(ACI_SIO_ytd_TOP2,
+                              values=[ANNUAL_AMOUNT],
+                              index=[Normalized_Customer_Name],
+                              aggfunc=np.sum,
+                              fill_value=0,
+                              margins=True)
+        sub_pt1=pt[:-1].sort(columns=[ANNUAL_AMOUNT], ascending=[0])
+        sub_pt2=sub_pt1.head(10)
+        sub_pt11=pt1[:-1].sort(columns=[ANNUAL_AMOUNT], ascending=[0])
+        sub_pt22=sub_pt11.head(10)
+
+    return sub_pt2,sub_pt22
+def create_sio_top_pt(sio_ytd_year,SIO_ytd_year_q,flag=True):
+    if flag==True:
+        pt=pd.pivot_table(SIO_ytd_year_q,
+                              values=[BOOKING_AMOUNT],
+                              index=[Normalized_Customer_Name],
+                              aggfunc=np.sum,
+                              fill_value=0,
+                              margins=True)
+        pt1=pd.pivot_table(sio_ytd_year,
+                              values=[BOOKING_AMOUNT],
+                              index=[Normalized_Customer_Name],
+                              aggfunc=np.sum,
+                              fill_value=0,
+                              margins=True)
+        sub_pt1=pt[:-1].sort(columns=[BOOKING_AMOUNT], ascending=[0])
+        sub_pt2=sub_pt1.head(10)
+        sub_pt11=pt1[:-1].sort(columns=[BOOKING_AMOUNT], ascending=[0])
+        sub_pt22=sub_pt11.head(10)
+    else:
+        pt=pd.pivot_table(SIO_ytd_year_q,
+                              values=[BOOKING_AMOUNT],
+                              index=[Normalized_Customer_Name],
+                              aggfunc=np.sum,
+                              fill_value=0,
+                              margins=True)
+        pt1=pd.pivot_table(sio_ytd_year,
+                              values=[BOOKING_AMOUNT],
+                              index=[Normalized_Customer_Name],
+                              aggfunc=np.sum,
+                              fill_value=0,
+                              margins=True)
+        sub_pt1=pt[:-1].sort(columns=[BOOKING_AMOUNT], ascending=[0])
+        sub_pt2=sub_pt1.head(10)
+        sub_pt11=pt1[:-1].sort(columns=[BOOKING_AMOUNT], ascending=[0])
+        sub_pt22=sub_pt11.head(10)
+    return sub_pt2,sub_pt22
+
+def create_template(path,presenter, date,fy_q_w):
+    out_path = os.path.join(path, 'output')
+    ppt = Presentation(os.path.join(out_path, 'template2014.pptx'))
+    props = ppt.core_properties
+    props.author = 'dongmli  Email: dongmli@cisco.com'
+    props.comments = 'Automatically created by APJC-CITT Bookings Analysis ReportCenter.'
+    props.keywords = 'COE APJC'
+    slides = ppt.slides
+    cover_slide = slides[0]
+    weekday_string = get_last_week_day(fy_q_w)
+    ytd_str = 'FY%sQ%sW%s YTD' % fy_q_w
+    sub_title = cover_slide.shapes[0].text_frame.paragraphs[0]
+    s0 = sub_title.add_run()
+    s0.text = ytd_str + '  '
+    s1 = sub_title.add_run()
+    s1.text = weekday_string
+    s1.font.bold = False
+    s1.font.italic = True
+    name, email = presenter.rsplit(' ', 1)
+    presenter = cover_slide.shapes[1].text_frame.paragraphs[0]
+    s0 = presenter.add_run()
+    s0.text = name + '  '
+    s1 = presenter.add_run()
+    s1.text = email
+    s1.font.bold = False
+    s1.font.italic = True
+    cover_slide.shapes[2].text = date
+    return ppt,slides,out_path
+
+def format_data(ytd,fy_q_w):
+    year='20%s'%(fy_q_w[0])
+    qtr_str = '%sQ%s'%(year,fy_q_w[1])
+    fiscal_week = fy_q_w[-1]
+    q0=ytd[FISCAL_YEAR]==int(year)
+    q1 = ytd[FISCAL_QUARTER] == qtr_str
+    q2 = ytd[FISCAL_WEEK] == int(fiscal_week)
+    week_df = ytd[q1 & q2 & q0]
+    qtd_df=ytd[q0&q1]
+    year_df=ytd[q0]
+    return week_df,qtd_df,year_df
+
+
+
+def create(path, ppt_filename, ytd, fy_q_w, presenter, date):
+    # print ytd.columns
+    ppt,slides,out_path=create_template(path,presenter, date,fy_q_w) #生成ppt 模板
+    week_df,qtd_df,year_df=format_data(ytd,fy_q_w)
+    sub_title_slides = [] #存放连接的 list
+    ytd_str0="FY%sQ%sW%s"%(fy_q_w[0],fy_q_w[1],fy_q_w[2])
+
+    print 'start Create Bookings of week report'
+
+    regions = ytd[REGION].dropna().unique()
+    regions.sort()
+    regions = [r for r in regions if r != "" and r!='OTHERS']
+    # print "regions"
+    # print regions
+
+    GSP = ytd[PL_Level1].dropna().unique()
+    GSP.sort()
+    GSP = [r for r in GSP if r!='']
+    # print "gsp"
+    # print GSP
+    print "start create APJC"
+    title="%sAPJC C&NS CITT Bookings"% (ytd_str0)
+    create_bookings_report(ppt,title,week_df)
+
+    title="NON-C&NS CITT Bookings"
+    slide=create_sub_title_slide(ppt, title)
+    print "ffffffffffff"
+    print slide
+    sub_title_slides.append(slide)
+
+    title="%s APJC NON- CITT BOOKINGS"%(ytd_str0)
+    create_title_only_slide(ppt, title)
+    title="APJC YTD"
+    slide=create_sub_title_slide(ppt, title)
+    sub_title_slides.append(slide)
+
+
+    pages = (('Segment', PL_Level1), ('Service Line', SERVICE_LINES),('Region',REGION))
+    for page in pages:
+        title_prefix_v10="FY%s YTD APJC C&NS CITT by %s"%(fy_q_w[0],page[0])
+        create_APJC_YTD(ppt,title_prefix_v10,ytd,year_df,page[1])
+    page1=(('Service Lines', SERVICE_LINES,IDT_Level3),('by Segment & Service Lines', PL_Level1,SERVICE_LINES),\
+               ('by Region & SERVICE LINES',REGION,SERVICE_LINES))
+
+    for page in page1:
+        title_prefix_v11="FY%s YTD APJC C&NS CITT %s"%(fy_q_w[0],page[0])
+        create_APJC_Double(ppt,title_prefix_v11,ytd,page[1],page[2])
+
+
+    pages2 = (('Segment', PL_Level1), ('Service Lines', SERVICE_LINES))
+    for p in pages2:
+        title1 = 'Top10 FY%s QTD APJC C&NS CITT Customers by %s' % (fy_q_w[0], p[0])
+        create_top_report(ppt,title1,qtd_df,p[1])
+        title = 'Top10 FY%s YTD APJC C&NS CITT Customers by %s' % (fy_q_w[0], p[0])
+        create_top_report(ppt, title, year_df, p[1])
+
+    print "start create ACI"
+    #ACI
+    title="APJC ACI"
+    create_sub_title_slide(ppt, title)
+    m0=ytd[IDT_Level3].map(lambda x:x=="UI")
+    m1=ytd[IDT_Level4].map(lambda x:x=="ACI")
+    ACI_ytd=ytd[m0&m1]
+    ACI_year_df=year_df[m0&m1]
+    page2=(('Segment',PL_Level1),('Region',REGION))
+    for p in page2:
+        title="ACI APJC C&NS CITT FY%s YTD by %s"%(fy_q_w[0],p[0])
+        try:
+            create_APJC_YTD(ppt,title,ACI_ytd,ACI_year_df,p[1])
+        except:
+            pass
+    title='SKUs- ACI APJC C&NS CITT FY%s YTD'%(fy_q_w[0])
+    create_APJC_one(ppt,ACI_ytd,SKU,title)
+    ACI_qtd_df=qtd_df[m0&m1]
+    pt1,pt2=create_sio_top_pt(ACI_year_df,ACI_qtd_df)
+    title="TOP 10 ACI QTD APJC C&NS CITT CUSTOMER"
+    title1='TOP 10 ACI FY%s YTD APJC C&NS CITT CUSTOMER'%(fy_q_w[0])
+    create_aci_top(ppt,title,pt1,pt2,title1)
+
+    print "start create UI DCN SW OPT"
+    #UI DCN SW OPT
+    # print set(list(ytd[IDT_Level3]))
+    # print set(list(ytd[SERVICE_LINES]))
+    APJC_list=['UI','OPTIMIZATION','SW']
+    for value in APJC_list:
+        flag=True
+        if value!='UI':
+            flag=False
+            m0=ytd[SERVICE_LINES].map(lambda x:x==value)
+            page=(('Segment',PL_Level1),('Region',REGION),('Service Line2',IDT_Level4))
+        else:
+            m0=ytd[IDT_Level3].map(lambda x:x==value)
+            page=(('Segment',PL_Level1),('Region',REGION),('Service Line2',IDT_Level3))
+        temp_ytd=ytd[m0]
+        temp_ytd_year=year_df[m0]
+        temp_ytd_qtd=qtd_df[m0]
+        title="APJC %s"%(value)
+        create_sub_title_slide(ppt, title)
+        try:
+            for p in page:
+                title="%s FY%s YTD by %s"%(value,fy_q_w[0],p[0])
+                create_APJC_YTD(ppt,title,temp_ytd,temp_ytd_year,p[1])
+            title="%s APJC FY%s YTD by Region & SL2"%(value,fy_q_w[0])
+            if flag:
+                create_APJC_Double(ppt,title,temp_ytd,REGION,IDT_Level3)
+            else:
+                create_APJC_Double(ppt,title,temp_ytd,REGION,IDT_Level4)
+
+            for item in GSP:
+                m0=ytd[PL_Level1].map(lambda x:x==item)
+                GSP_data=temp_ytd[m0]
+                title="%s APJC(%s) FY%s YTD by Region & SL2"%(value,item,fy_q_w[0])
+                if flag:
+
+                    create_APJC_Double(ppt,title,GSP_data,REGION,IDT_Level3)
+                else:
+                    create_APJC_Double(ppt,title,GSP_data,REGION,IDT_Level4)
+            title="SKU- %s APJC C&NS CITT FY%s YTD"%(value,fy_q_w[0])
+            create_APJC_one(ppt,temp_ytd,SKU,title)
+
+            pt1,pt2=create_sio_top_pt(temp_ytd_year,temp_ytd_qtd)
+            title="TOP 10 %s QTD APJC C&NS CITT CUSTOMER"%(value)
+            title1='TOP 10 %s FY%s YTD APJC C&NS CITT CUSTOMER'%(value,fy_q_w[0])
+            create_aci_top(ppt,title,pt1,pt2,title1)
+        except:
+            print value+" error"
+
+
+    #Gsp
+    print "start create GSP ....."
+    for item in GSP:
+        m0=ytd[PL_Level1].map(lambda x:x==item)
+        temp_ytd=ytd[m0]
+        temp_ytd_year=year_df[m0]
+        temp_ytd_qtd=qtd_df[m0]
+        title="APJC by Segment -%s"%(item)
+        create_sub_title_slide(ppt, title)
+        page=(('Region',REGION),('Service Line',SERVICE_LINES))
+        for p in page:
+            title="%s FY%s YTD APJC C&NS CITT by %s"%(item,fy_q_w[0],p[0])
+            create_APJC_YTD(ppt,title,temp_ytd,temp_ytd_year,p[1])
+        title="%s FY%s YTD APJC C&NS CITT by Region & Service lines"%(item,fy_q_w[0])
+        create_APJC_Double(ppt,title,temp_ytd,REGION,SERVICE_LINES)
+        title='SKUs- %s APJC C&NS CITT FY%s YTD'%(item,fy_q_w[0])
+        create_APJC_one(ppt,temp_ytd,SKU,title)
+        title1 = 'Top10 %s FY%s QTD APJC C&NS CITT Customers by Service Line' % (item,fy_q_w[0])
+        create_top_report(ppt,title1,temp_ytd_qtd,SERVICE_LINES)
+        title = 'Top10 %s FY%s YTD APJC C&NS CITT Customers by Service Line' % (item,fy_q_w[0])
+        create_top_report(ppt, title, temp_ytd_year, SERVICE_LINES)
+    #regions
+    # print "start create regions"
+    # for region in regions:
+    #     title="%s"%(region)
+    #     slide=create_sub_title_slide(ppt, title)
+    #     sub_title_slides.append(slide)
+    #     m0=ytd[REGION].map(lambda x:x==region)
+    #     temp_ytd=ytd[m0]
+    #     temp_ytd_year=year_df[m0]
+    #     temp_ytd_qtd=qtd_df[m0]
+    #     # if region=='GC':
+    #     #     title='%s %s APJC C&NS CITT By Region'%(ytd_str0,region)
+    #     #     create_APJC_one(ppt,ytd,REGION_GC,title)
+    #
+    #     page=(("Service Lines",SERVICE_LINES),('Segment',PL_Level1))
+    #     for p in page:
+    #         title="%s %s APJC C&NS CITT by %s"%(ytd_str0,region,p[0])
+    #         create_APJC_YTD(ppt,title,temp_ytd,temp_ytd_year,p[1])
+    #
+    #     pages2=(('Segment & Service Lines',PL_Level1,SERVICE_LINES),('Service Lines',SERVICE_LINES,IDT_Level3),('Country',COUNTRY,SERVICE_LINES))
+    #
+    #     for page2 in pages2:
+    #         title="FY%s YTD %s  APJC C&NS CITT %s"%(fy_q_w[0],region,page2[0])
+    #         create_APJC_Double(ppt,title,temp_ytd,page2[1],page2[2])
+    #
+    #     for temp_gsp in GSP:
+    #         title="%s %s %s APJC C&NS CITT by Service Lines"%(temp_gsp,ytd_str0,region)
+    #         q0=ytd[PL_Level1].map(lambda x:x==temp_gsp)
+    #         temp_ytd_gsp=temp_ytd[q0]
+    #         try:
+    #             create_APJC_Double(ppt,title,temp_ytd_gsp,SERVICE_LINES,IDT_Level3)
+    #         except:
+    #             print region+" "+temp_gsp+" is no data"
+    #
+    #     pages2 = (('Segment', PL_Level1), ('Service Lines', SERVICE_LINES))
+    #     for p in pages2:
+    #         title1 = 'Top10 FY%s QTD %s APJC C&NS CITT Customers by %s' % (fy_q_w[0],region, p[0])
+    #         create_top_report(ppt,title1,temp_ytd_qtd,p[1])
+    #         title = 'Top10 FY%s YTD %s APJC C&NS CITT Customers by %s' % (fy_q_w[0],region,p[0])
+    #         create_top_report(ppt, title, temp_ytd_year, p[1])
+    #
+    #
+
+
+    # # # # set Hyper Link for TOC
+    # # #
+    # # #
+    s1 = slides[1]
+    res = s1.part._rels
+    for i, target in enumerate(sub_title_slides):
+        rid = 'rId%s' % (i + 3)
+        # res[rid]._target = target
+        s1.part.related_parts[rid] = target.part._rels
+    ppt.save(os.path.join(out_path, ppt_filename))
+
+
+if __name__ == '__main__':
+    path = '../private'
+    #filename = 'FY17 Q1 WK10 APJC CITT BOOKINGS.csv'
+    filename = 'FY17 Q4 WK13 APJC CITT BOOKINGS.csv'
+    out_path = os.path.join(path, 'output')
+
+    raw_df = get_ytd_df(path, filename)
+
+    m1=raw_df[SEGMENT].map(lambda x:x!="WW DISTRIBUTION")
+    m2=raw_df[COUNTRY].map(lambda x:x!="UNITED STATES" and x!= "UNITED KINGDOM")
+    raw_df=raw_df[m1&m2]
+    import re
+    import time
+    fy_q_w = re.search('FY(\d+)\sQ([1-4])\s[WwEeKk]+(\d+)', filename).groups()
+    ppt_fn= "FY%sQ%sW%s APJC C&NS CITT BOOKINGS.pptx"%fy_q_w
+    # # ppt_fn = 'CITT Booking Analysis Report FY%sQ%sW%s TYD.pptx' % fy_q_w
+    today = time.strftime('%b %d,%Y')
+    create(path, ppt_fn, raw_df, fy_q_w, 'Siew Fay fho@cisco.com', today)
+
+
+
+
